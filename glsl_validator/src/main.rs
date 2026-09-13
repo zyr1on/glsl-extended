@@ -165,6 +165,63 @@ pub fn detect_target_api(text: &str, default_target: TargetApi) -> TargetApi {
     default_target
 }
 
+pub fn percent_decode_str(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            result.push('%');
+            result.push_str(&hex);
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let stripped = uri.strip_prefix("file://")?;
+    let path_str = if cfg!(windows) {
+        if stripped.starts_with('/') && stripped.chars().nth(2) == Some(':') {
+            &stripped[1..]
+        } else {
+            stripped
+        }
+    } else {
+        stripped
+    };
+
+    let decoded = percent_decode_str(path_str);
+    Some(PathBuf::from(decoded))
+}
+
+pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(file_path) = uri_to_path(uri) {
+        if let Some(parent) = file_path.parent() {
+            if parent.exists() {
+                dirs.push(parent.to_path_buf());
+                let inc = parent.join("include");
+                if inc.exists() && inc.is_dir() {
+                    dirs.push(inc);
+                }
+                let shaders = parent.join("shaders");
+                if shaders.exists() && shaders.is_dir() {
+                    dirs.push(shaders);
+                }
+            }
+        }
+    }
+    dirs
+}
+
 fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Value> {
     let stage = get_stage_from_uri(uri, text);
     let target = detect_target_api(text, default_target);
@@ -187,14 +244,21 @@ fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Valu
         }
     };
 
+    let inc_dirs = get_include_dirs(uri);
     log(&format!(
-        "Validating uri='{uri}', stage='{stage}', target='{:?}' (flag='{}'), compiler='{compiler}'",
+        "Validating uri='{uri}', stage='{stage}', target='{:?}' (flag='{}'), compiler='{compiler}', includes={}",
         target,
-        target.flag()
+        target.flag(),
+        inc_dirs.len()
     ));
 
-    let mut child = match Command::new(&compiler)
-        .args(["--stdin", target.flag(), "--error-column", "-S", stage])
+    let mut cmd = Command::new(&compiler);
+    cmd.args(["--stdin", target.flag(), "--error-column", "-S", stage]);
+    for inc in &inc_dirs {
+        cmd.arg(format!("-I{}", inc.display()));
+    }
+
+    let mut child = match cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -492,6 +556,82 @@ pub fn generate_swizzle_completions(dim: usize) -> Vec<Value> {
     items
 }
 
+pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
+    let snippets = [
+        (
+            "ubo",
+            "Uniform Buffer Object (Generic)",
+            "layout(std140, binding = ${1:0}) uniform ${2:BlockName} {\n\t$0\n};",
+            "Generic Uniform Buffer Object (UBO) declaration",
+        ),
+        (
+            "ssbo",
+            "Shader Storage Buffer Object (Generic)",
+            "layout(std430, binding = ${1:0}) buffer ${2:BlockName} {\n\t$0\n};",
+            "Generic Shader Storage Buffer Object (SSBO) declaration",
+        ),
+        (
+            "vert",
+            "Vertex Shader Skeleton",
+            "#version 460 core\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
+            "Clean GLSL Vertex Shader template",
+        ),
+        (
+            "frag",
+            "Fragment Shader Skeleton",
+            "#version 460 core\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
+            "Clean GLSL Fragment Shader template",
+        ),
+        (
+            "comp",
+            "Compute Shader Skeleton",
+            "#version 460 core\n\nlayout(local_size_x = ${1:16}, local_size_y = ${2:16}, local_size_z = ${3:1}) in;\n\nvoid main() {\n\t$0\n}\n",
+            "Clean GLSL Compute Shader template",
+        ),
+        (
+            "geom",
+            "Geometry Shader Skeleton",
+            "#version 460 core\n\nlayout(${1:triangles}) in;\nlayout(${2:triangle_strip}, max_vertices = ${3:3}) out;\n\nvoid main() {\n\tfor (int i = 0; i < gl_in.length(); i++) {\n\t\tgl_Position = gl_in[i].gl_Position;\n\t\tEmitVertex();\n\t}\n\tEndPrimitive();\n}\n",
+            "Clean GLSL Geometry Shader template",
+        ),
+        (
+            "struct",
+            "Struct Definition",
+            "struct ${1:Name} {\n\t$0\n};",
+            "GLSL Struct definition",
+        ),
+        (
+            "func",
+            "Function Definition",
+            "${1:void} ${2:funcName}(${3}) {\n\t$0\n}",
+            "GLSL Function definition",
+        ),
+        (
+            "main",
+            "Main Function",
+            "void main() {\n\t$0\n}",
+            "GLSL void main() function",
+        ),
+    ];
+
+    let query_lower = query.to_lowercase();
+    snippets
+        .iter()
+        .filter(|(prefix, _, _, _)| query_lower.is_empty() || prefix.starts_with(&query_lower))
+        .map(|(prefix, detail, body, doc)| {
+            json!({
+                "label": prefix,
+                "kind": 15, // Snippet
+                "detail": detail,
+                "documentation": doc,
+                "insertText": body,
+                "insertTextFormat": 2, // Snippet
+                "sortText": format!("00_{}", prefix)
+            })
+        })
+        .collect()
+}
+
 pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
     let params = match msg.get("params") {
         Some(p) => p,
@@ -516,30 +656,304 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     let prefix = &line[..col];
 
     let trimmed = prefix.trim_end();
-    if !trimmed.ends_with('.') {
-        return json!([]);
+    if let Some(stripped) = trimmed.strip_suffix('.') {
+        let before_dot = stripped.trim_end();
+        let mut start = before_dot.len();
+        for (i, c) in before_dot.char_indices().rev() {
+            if c.is_alphanumeric() || c == '_' || c == '.' {
+                start = i;
+            } else {
+                break;
+            }
+        }
+
+        let expr = &before_dot[start..];
+        if expr.is_empty() {
+            return json!([]);
+        }
+
+        log(&format!("Swizzle completion triggered for expr='{expr}' at line={line_idx}, col={col_idx}"));
+
+        let dim = infer_vector_dimension(doc, expr);
+        let items = generate_swizzle_completions(dim);
+        return json!(items);
     }
 
-    let before_dot = trimmed[..trimmed.len() - 1].trim_end();
-    let mut start = before_dot.len();
-    for (i, c) in before_dot.char_indices().rev() {
-        if c.is_alphanumeric() || c == '_' || c == '.' {
-            start = i;
+    // Check if user is typing a snippet prefix
+    let mut word_start = prefix.len();
+    for (i, c) in prefix.char_indices().rev() {
+        if c.is_alphanumeric() || c == '_' {
+            word_start = i;
         } else {
             break;
         }
     }
-
-    let expr = &before_dot[start..];
-    if expr.is_empty() {
-        return json!([]);
+    let word = &prefix[word_start..];
+    if !word.is_empty() {
+        let snippets = generate_snippet_completions(word);
+        if !snippets.is_empty() {
+            log(&format!("Snippet completion triggered for word='{word}'"));
+            return json!(snippets);
+        }
     }
 
-    log(&format!("Swizzle completion triggered for expr='{expr}' at line={line_idx}, col={col_idx}"));
+    json!([])
+}
 
-    let dim = infer_vector_dimension(doc, expr);
-    let items = generate_swizzle_completions(dim);
+fn find_clang_format() -> Option<String> {
+    // 1. Explicit environment variable
+    if let Ok(env_path) = std::env::var("CLANG_FORMAT_PATH") {
+        if Path::new(&env_path).exists() {
+            return Some(env_path);
+        }
+    }
+
+    // 2. Common Windows MSYS2 / UCRT64 path
+    #[cfg(windows)]
+    {
+        let msys = "C:\\msys64\\ucrt64\\bin\\clang-format.exe";
+        if Path::new(msys).exists() {
+            return Some(msys.to_string());
+        }
+    }
+
+    // 3. PATH lookup
+    if is_in_path("clang-format") {
+        return Some("clang-format".to_string());
+    }
+
+    None
+}
+
+pub fn format_document(uri: &str, text: &str) -> Option<Value> {
+    let clang_format = find_clang_format()?;
+    let filename = if let Some(path) = uri_to_path(uri) {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("shader.glsl")
+            .to_string()
+    } else {
+        "shader.glsl".to_string()
+    };
+
+    log(&format!("Formatting doc '{uri}' using '{clang_format}' with assume-filename='{filename}'"));
+
+    let mut child = Command::new(&clang_format)
+        .args([format!("--assume-filename={filename}")])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        log(&format!("clang-format failed with exit code: {:?}", output.status.code()));
+        return None;
+    }
+
+    let formatted = String::from_utf8(output.stdout).ok()?;
+    if formatted == text {
+        log("Doc is already formatted cleanly, returning empty edits.");
+        return Some(json!([]));
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len();
+    let last_col = lines.last().map(|l| l.chars().count()).unwrap_or(0);
+
+    Some(json!([
+        {
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": line_count.saturating_sub(1), "character": last_col }
+            },
+            "newText": formatted
+        }
+    ]))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorItem {
+    pub line: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+    pub r: f64,
+    pub g: f64,
+    pub b: f64,
+    pub a: f64,
+    pub is_vec4: bool,
+}
+
+pub fn parse_color_token(token: &str) -> Option<f64> {
+    let s = token.trim().trim_end_matches(['f', 'F']);
+    s.parse::<f64>().ok()
+}
+
+pub fn find_colors_in_text(text: &str) -> Vec<ColorItem> {
+    let mut results = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+
+        let mut search_idx = 0;
+        while search_idx < line.len() {
+            let slice = &line[search_idx..];
+            let v4_pos = slice.find("vec4(");
+            let v3_pos = slice.find("vec3(");
+
+            let (found_pos, is_v4) = match (v4_pos, v3_pos) {
+                (Some(p4), Some(p3)) => {
+                    if p4 <= p3 {
+                        (p4, true)
+                    } else {
+                        (p3, false)
+                    }
+                }
+                (Some(p4), None) => (p4, true),
+                (None, Some(p3)) => (p3, false),
+                (None, None) => break,
+            };
+
+            let start_char_idx = search_idx + found_pos;
+            let constructor_len = 5; // "vec4(" or "vec3("
+            let args_start = start_char_idx + constructor_len;
+
+            if let Some(close_idx) = line[args_start..].find(')') {
+                let end_char_idx = args_start + close_idx + 1;
+                let args_str = &line[args_start..args_start + close_idx];
+                let tokens: Vec<&str> = args_str.split(',').collect();
+
+                if is_v4 && tokens.len() == 4 {
+                    if let (Some(r), Some(g), Some(b), Some(a)) = (
+                        parse_color_token(tokens[0]),
+                        parse_color_token(tokens[1]),
+                        parse_color_token(tokens[2]),
+                        parse_color_token(tokens[3]),
+                    ) {
+                        results.push(ColorItem {
+                            line: line_idx,
+                            start_col: start_char_idx,
+                            end_col: end_char_idx,
+                            r: r.clamp(0.0, 1.0),
+                            g: g.clamp(0.0, 1.0),
+                            b: b.clamp(0.0, 1.0),
+                            a: a.clamp(0.0, 1.0),
+                            is_vec4: true,
+                        });
+                    }
+                } else if !is_v4 && tokens.len() == 3 {
+                    if let (Some(r), Some(g), Some(b)) = (
+                        parse_color_token(tokens[0]),
+                        parse_color_token(tokens[1]),
+                        parse_color_token(tokens[2]),
+                    ) {
+                        results.push(ColorItem {
+                            line: line_idx,
+                            start_col: start_char_idx,
+                            end_col: end_char_idx,
+                            r: r.clamp(0.0, 1.0),
+                            g: g.clamp(0.0, 1.0),
+                            b: b.clamp(0.0, 1.0),
+                            a: 1.0,
+                            is_vec4: false,
+                        });
+                    }
+                }
+                search_idx = end_char_idx;
+            } else {
+                search_idx = start_char_idx + constructor_len;
+            }
+        }
+    }
+    results
+}
+
+pub fn handle_document_color(text: &str) -> Value {
+    let colors = find_colors_in_text(text);
+    let items: Vec<Value> = colors
+        .into_iter()
+        .map(|c| {
+            json!({
+                "range": {
+                    "start": { "line": c.line, "character": c.start_col },
+                    "end": { "line": c.line, "character": c.end_col }
+                },
+                "color": {
+                    "red": c.r,
+                    "green": c.g,
+                    "blue": c.b,
+                    "alpha": c.a
+                }
+            })
+        })
+        .collect();
     json!(items)
+}
+
+fn format_color_component(val: f64) -> String {
+    if (val - val.round()).abs() < 1e-4 {
+        format!("{:.1}", val)
+    } else {
+        format!("{:.3}", val)
+    }
+}
+
+pub fn handle_color_presentation(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
+    let params = match msg.get("params") {
+        Some(p) => p,
+        None => return json!([]),
+    };
+    let color = match params.get("color") {
+        Some(c) => c,
+        None => return json!([]),
+    };
+
+    let r = color["red"].as_f64().unwrap_or(0.0);
+    let g = color["green"].as_f64().unwrap_or(0.0);
+    let b = color["blue"].as_f64().unwrap_or(0.0);
+    let a = color["alpha"].as_f64().unwrap_or(1.0);
+
+    let range = &params["range"];
+    let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
+    let is_vec4 = if let Some(doc) = doc_cache.get(uri) {
+        let line_idx = range["start"]["line"].as_u64().unwrap_or(0) as usize;
+        let start_col = range["start"]["character"].as_u64().unwrap_or(0) as usize;
+        if let Some(line) = doc.lines().nth(line_idx) {
+            line.chars().skip(start_col).take(4).collect::<String>() == "vec4"
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+
+    let r_str = format_color_component(r);
+    let g_str = format_color_component(g);
+    let b_str = format_color_component(b);
+    let a_str = format_color_component(a);
+
+    let new_text = if is_vec4 {
+        format!("vec4({r_str}, {g_str}, {b_str}, {a_str})")
+    } else {
+        format!("vec3({r_str}, {g_str}, {b_str})")
+    };
+
+    json!([
+        {
+            "label": new_text,
+            "textEdit": {
+                "range": range,
+                "newText": new_text
+            }
+        }
+    ])
 }
 
 fn send_lsp_message<W: Write>(writer: &mut W, msg: &Value) -> io::Result<()> {
@@ -621,7 +1035,9 @@ fn main() -> io::Result<()> {
                                 "textDocumentSync": 1,
                                 "completionProvider": {
                                     "triggerCharacters": ["."]
-                                }
+                                },
+                                "documentFormattingProvider": true,
+                                "colorProvider": true
                             }
                         }
                     });
@@ -633,6 +1049,41 @@ fn main() -> io::Result<()> {
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "result": items
+                    });
+                    send_lsp_message(&mut stdout_lock, &resp)?;
+                }
+                "textDocument/formatting" => {
+                    let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
+                    let edits = doc_cache
+                        .get(uri)
+                        .and_then(|text| format_document(uri, text))
+                        .unwrap_or(Value::Null);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": edits
+                    });
+                    send_lsp_message(&mut stdout_lock, &resp)?;
+                }
+                "textDocument/documentColor" => {
+                    let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
+                    let colors = doc_cache
+                        .get(uri)
+                        .map(|text| handle_document_color(text))
+                        .unwrap_or_else(|| json!([]));
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": colors
+                    });
+                    send_lsp_message(&mut stdout_lock, &resp)?;
+                }
+                "textDocument/colorPresentation" => {
+                    let presentations = handle_color_presentation(&msg, &doc_cache);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": presentations
                     });
                     send_lsp_message(&mut stdout_lock, &resp)?;
                 }
@@ -860,5 +1311,73 @@ mod tests {
         assert!(items4.iter().any(|i| i["label"] == "xyzw"));
         assert!(items4.iter().any(|i| i["label"] == "rgba"));
         assert!(items4.iter().any(|i| i["label"] == "stpq"));
+    }
+
+    #[test]
+    fn test_percent_decode_str() {
+        assert_eq!(percent_decode_str("hello%20world"), "hello world");
+        assert_eq!(percent_decode_str("shader%2Bcommon.glsl"), "shader+common.glsl");
+        assert_eq!(percent_decode_str("plain_path"), "plain_path");
+    }
+
+    #[test]
+    fn test_uri_to_path() {
+        let p1 = uri_to_path("file:///project/test.frag");
+        assert!(p1.is_some());
+
+        let p2 = uri_to_path("file:///C:/Users/test/shader.vert");
+        assert!(p2.is_some());
+        if cfg!(windows) {
+            assert!(p2.unwrap().to_str().unwrap().contains("C:"));
+        }
+    }
+
+    #[test]
+    fn test_generate_snippet_completions() {
+        let ubo_snips = generate_snippet_completions("ubo");
+        assert_eq!(ubo_snips.len(), 1);
+        assert_eq!(ubo_snips[0]["label"], "ubo");
+        assert!(ubo_snips[0]["insertText"].as_str().unwrap().contains("layout(std140, binding = ${1:0}) uniform ${2:BlockName}"));
+
+        let ssbo_snips = generate_snippet_completions("ssbo");
+        assert_eq!(ssbo_snips.len(), 1);
+        assert_eq!(ssbo_snips[0]["label"], "ssbo");
+
+        let vert_snips = generate_snippet_completions("vert");
+        assert_eq!(vert_snips.len(), 1);
+        assert!(vert_snips[0]["insertText"].as_str().unwrap().contains("#version 460 core"));
+
+        let all_snips = generate_snippet_completions("");
+        assert!(all_snips.len() >= 8);
+    }
+
+    #[test]
+    fn test_parse_color_token() {
+        assert_eq!(parse_color_token("1.0"), Some(1.0));
+        assert_eq!(parse_color_token("0.5f"), Some(0.5));
+        assert_eq!(parse_color_token("0.25F"), Some(0.25));
+        assert_eq!(parse_color_token("0"), Some(0.0));
+        assert_eq!(parse_color_token("1"), Some(1.0));
+        assert_eq!(parse_color_token("invalid"), None);
+    }
+
+    #[test]
+    fn test_find_colors_in_text() {
+        let glsl = r#"
+            vec4 col1 = vec4(1.0, 0.5, 0.2, 1.0);
+            vec3 col2 = vec3(0.0, 1.0, 0.0);
+            // vec4 comment = vec4(0.0, 0.0, 0.0, 1.0);
+            float a = 1.0;
+        "#;
+        let colors = find_colors_in_text(glsl);
+        assert_eq!(colors.len(), 2);
+        assert!(colors[0].is_vec4);
+        assert_eq!(colors[0].r, 1.0);
+        assert_eq!(colors[0].g, 0.5);
+        assert_eq!(colors[0].b, 0.2);
+        assert_eq!(colors[0].a, 1.0);
+
+        assert!(!colors[1].is_vec4);
+        assert_eq!(colors[1].g, 1.0);
     }
 }

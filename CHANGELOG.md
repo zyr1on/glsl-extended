@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.4] — 2026-09-13
+
+### Added
+- **GLSL Generic Boilerplate Snippets:**
+  - Added clean, generic code snippets for both Zed native snippets (`languages/glsl/snippets.json`) and LSP completion (`textDocument/completion`):
+    - `ubo`: Clean Uniform Buffer Object block skeleton with generic placeholders (`layout(std140, binding = 0) uniform BlockName { ... };`).
+    - `ssbo`: Clean Shader Storage Buffer Object block skeleton (`layout(std430, binding = 0) buffer BlockName { ... };`).
+    - `vert`: Complete OpenGL 4.6 Vertex Shader skeleton (`#version 460 core`, in position, `gl_Position`).
+    - `frag`: Complete OpenGL 4.6 Fragment Shader skeleton (`#version 460 core`, out fragColor, `gl_FragColor`).
+    - `comp`: Complete Compute Shader skeleton (`layout(local_size_x = 16, ...) in`).
+    - `geom`: Complete Geometry Shader skeleton (`triangles` in, `triangle_strip` out, primitive emission loop).
+    - `struct`: Generic struct declaration template.
+    - `func`: Generic function signature template.
+    - `main`: Clean `void main() { ... }` entrypoint template.
+- **Code Formatting via `clang-format` (`textDocument/formatting`):**
+  - Advertised `"documentFormattingProvider": true` in `glsl_validator`.
+  - Automatically locates `clang-format` from `CLANG_FORMAT_PATH`, Windows MSYS2 (`C:\msys64\ucrt64\bin\clang-format.exe`), or system `PATH`.
+  - Runs formatting with `--assume-filename` to preserve GLSL style, returning full document edits on save or on demand.
+- **Document Color Provider (`textDocument/documentColor` & `textDocument/colorPresentation`):**
+  - Real-time inline color swatch previews for `vec3(...)` and `vec4(...)` color constructors in GLSL shaders.
+  - Interactive color picker support via `textDocument/colorPresentation`, allowing users to adjust colors visually and write back formatted `vec3`/`vec4` literals.
+- **Automatic Relative `#include` Directory Resolution:**
+  - `glsl_validator` automatically resolves the active shader file's directory and passes `-I<parent_dir>`, `-I<parent_dir>/include`, and `-I<parent_dir>/shaders` to `glslangValidator`.
+  - Fixes missing `#include` resolution errors when editing modular shader projects with local header files.
+- **Expanded Unit Test Suite:**
+  - Added comprehensive tests for snippet generation, color token parsing, color extraction, and URI path percent-decoding (11 unit tests passing).
+
+---
+
 ## [0.1.3] — 2026-09-13
 
 ### Added

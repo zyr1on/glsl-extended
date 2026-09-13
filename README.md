@@ -32,6 +32,32 @@ Comprehensive, high-performance GLSL and shader development extension for the **
   - Works seamlessly on standalone variables (`vec4 a; a.`), struct members (`t.a.`), and chained swizzles (`t.a.xyz.`).
   - Context-aware dimension inference: accurately suggests 2D swizzles for `vec2`, 3D for `vec3`, and 4D for `vec4`.
 
+- **GLSL Generic Boilerplate Snippets:**
+  - Clean, generic template skeletons without domain-specific hardcoded names.
+  - Available through both native Zed snippets and LSP completion:
+    - `ubo`: Generic Uniform Buffer Object (`layout(std140, binding = 0) uniform BlockName { ... };`).
+    - `ssbo`: Generic Shader Storage Buffer Object (`layout(std430, binding = 0) buffer BlockName { ... };`).
+    - `vert`: Complete OpenGL 4.6 Vertex Shader skeleton.
+    - `frag`: Complete OpenGL 4.6 Fragment Shader skeleton.
+    - `comp`: Compute Shader template with workgroup size layout.
+    - `geom`: Geometry Shader template with primitive processing.
+    - `struct`: Generic struct definition.
+    - `func`: Generic function declaration with parameter placeholders.
+    - `main`: Clean `void main() { ... }` shader entrypoint.
+
+- **Automatic Code Formatting (`clang-format`):**
+  - Full `textDocument/formatting` support powered by `clang-format`.
+  - Automatically detected from `CLANG_FORMAT_PATH`, Windows MSYS2 UCRT64, or system `PATH`.
+  - Formats GLSL cleanly on save (`editor: format`) using `--assume-filename`.
+
+- **Interactive Document Color Swatches & Picker:**
+  - Real-time inline color swatch previews for `vec3(...)` and `vec4(...)` color literals in shaders.
+  - Interactive color picker support via `textDocument/colorPresentation` to visually choose colors and format them back into shaders.
+
+- **Relative `#include` Directory Resolution:**
+  - Automatic include path discovery (`-I<parent_dir>`, `-I<parent_dir>/include`, `-I<parent_dir>/shaders`).
+  - Allows seamless multi-file shader projects using `#include "common.glsl"` without compiler errors.
+
 - **Cross-Platform Compatibility:**
   - Fully compatible with **Windows**, **Linux**, and **macOS** (both Apple Silicon and Intel).
 
