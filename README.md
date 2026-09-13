@@ -57,11 +57,7 @@ The extension integrates with two core command-line tools:
    - **Linux:** `sudo apt install glslang-tools` (Ubuntu/Debian) or `sudo pacman -S glslang` (Arch).
    - **macOS:** `brew install glslang`.
 
-3. **`glsl_validator`**: The lightweight LSP bridge included in this repository under `bin/`.
-   - Can also be built from source using:
-     ```bash
-     cargo install --path glsl_validator
-     ```
+3. **`glsl_validator`**: Automatically downloaded from GitHub Releases by Zed on first launch. Can also be built from source using `cargo install --path glsl_validator`.
 
 ---
 
@@ -104,8 +100,6 @@ zed-glsl-extended/
 ├── .github/
 │   └── workflows/
 │       └── release.yml          # Automated multi-platform binary release
-├── bin/
-│   └── glsl_validator.exe       # Pre-built Windows LSP bridge binary
 ├── glsl_validator/              # Linter LSP bridge source code
 │   ├── Cargo.toml
 │   └── src/

@@ -6,6 +6,9 @@ glsl_validator/target/
 *.wasm
 extension.wasm
 
+# Pre-built local binaries (now distributed via GitHub Releases)
+bin/
+
 # Cargo lock files (libraries / extensions usually ignore them)
 *.lock
 
