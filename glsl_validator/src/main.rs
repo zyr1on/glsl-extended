@@ -311,41 +311,80 @@ fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Valu
         inc_dirs.len()
     ));
 
-    let mut cmd = Command::new(&compiler);
-    cmd.args(["--stdin", target.flag(), "--error-column", "-S", stage]);
-    for inc in &inc_dirs {
-        cmd.arg(format!("-I{}", inc.display()));
-    }
-
-    let mut child = match cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log(&format!("ERROR: Failed to spawn '{compiler}': {e}"));
-            return diagnostics;
+    let (compile_text, pre_output) = if target == TargetApi::OpenGl && text.contains("#include") {
+        log(&format!("Preprocessing '#include' directives for OpenGL target using '{compiler}'"));
+        let mut prep_cmd = Command::new(&compiler);
+        prep_cmd.args(["--stdin", "-E", "-S", stage]);
+        for inc in &inc_dirs {
+            prep_cmd.arg(format!("-I{}", inc.display()));
         }
+        if let Ok(mut child) = prep_cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if let Ok(output) = child.wait_with_output() {
+                if !output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    (text.to_string(), Some(format!("{}\n{}", stdout, stderr)))
+                } else {
+                    let preprocessed = String::from_utf8_lossy(&output.stdout).to_string();
+                    (preprocessed, None)
+                }
+            } else {
+                (text.to_string(), None)
+            }
+        } else {
+            (text.to_string(), None)
+        }
+    } else {
+        (text.to_string(), None)
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes());
-    }
-
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => {
-            log(&format!("ERROR: Failed to wait on '{compiler}': {e}"));
-            return diagnostics;
+    let full_output = if let Some(err_output) = pre_output {
+        err_output
+    } else {
+        let mut cmd = Command::new(&compiler);
+        cmd.args(["--stdin", target.flag(), "--error-column", "-S", stage]);
+        for inc in &inc_dirs {
+            cmd.arg(format!("-I{}", inc.display()));
         }
-    };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let full_output = format!("{}\n{}", stdout, stderr);
-    log(&format!("Compiler exit code: {:?}, output lines: {}", output.status.code(), full_output.lines().count()));
+        let mut child = match cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log(&format!("ERROR: Failed to spawn '{compiler}': {e}"));
+                return diagnostics;
+            }
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(compile_text.as_bytes());
+        }
+
+        let output = match child.wait_with_output() {
+            Ok(o) => o,
+            Err(e) => {
+                log(&format!("ERROR: Failed to wait on '{compiler}': {e}"));
+                return diagnostics;
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        format!("{}\n{}", stdout, stderr)
+    };
+    log(&format!("Validation output lines: {}", full_output.lines().count()));
 
     for raw_line in full_output.lines() {
         let line = raw_line.trim();
