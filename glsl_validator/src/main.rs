@@ -1,25 +1,56 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use serde_json::{json, Value};
+
+fn get_log_path() -> PathBuf {
+    let mut p = std::env::temp_dir();
+    p.push("glsl_validator.log");
+    p
+}
 
 fn log(msg: &str) {
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("C:\\Users\\Semih\\AppData\\Local\\Temp\\glsl_validator.log")
+        .open(get_log_path())
     {
         let _ = writeln!(f, "[glsl_validator] {}", msg);
     }
 }
 
 fn find_glslang_validator() -> String {
-    let known = "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe";
-    if Path::new(known).exists() {
-        return known.to_string();
+    // 1. Explicit environment variable
+    if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
+        if Path::new(&env_path).exists() {
+            return env_path;
+        }
     }
+
+    // 2. Vulkan SDK standard location
+    if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
+        let vk_bin = Path::new(&vk_sdk).join("bin").join(if cfg!(windows) {
+            "glslangValidator.exe"
+        } else {
+            "glslangValidator"
+        });
+        if vk_bin.exists() {
+            return vk_bin.to_string_lossy().to_string();
+        }
+    }
+
+    // 3. Common Windows MSYS2 / UCRT64 path
+    #[cfg(windows)]
+    {
+        let msys = "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe";
+        if Path::new(msys).exists() {
+            return msys.to_string();
+        }
+    }
+
+    // 4. Default to PATH lookup
     "glslangValidator".to_string()
 }
 
@@ -118,17 +149,12 @@ fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
             &line["WARNING: ".len()..]
         };
 
-        // Skip compilation summary line
         if rest.contains("compilation errors") || rest.contains("No code generated") {
             continue;
         }
 
         log(&format!("Raw diagnostic line: {line}"));
 
-        // Format:
-        // 0:line:col: message
-        // 0:line: message
-        // stdin:line:col: message
         let parts: Vec<&str> = rest.splitn(4, ':').collect();
         if parts.len() < 3 {
             continue;

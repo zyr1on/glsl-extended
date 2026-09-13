@@ -31,7 +31,7 @@ impl GlslExtendedExtension {
             return Ok(path.clone());
         }
 
-        // 3) GitHub Release'den indir
+        // 3) GitHub Release'den otomatik indir
         zed::set_language_server_installation_status(
             language_server_id,
             &zed::LanguageServerInstallationStatus::CheckingForUpdate,
@@ -95,24 +95,18 @@ impl GlslExtendedExtension {
     }
 
     fn find_glsl_validator(&self, worktree: &zed::Worktree) -> Result<String> {
-        // 1) Worktree PATH icinde var mi?
+        // 1) Worktree / Sistem PATH icinde ara (Windows, Linux, macOS)
         if let Some(path) = worktree.which("glsl_validator") {
             return Ok(path);
         }
 
-        // 2) Bilinen MSYS2/ucrt64 konumu
-        let known = "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe";
-        if fs::metadata(known).is_ok_and(|s| s.is_file()) {
-            return Ok(known.to_string());
+        // 2) Windows MSYS2 / UCRT64 varsayilan konumu
+        let msys = "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe";
+        if fs::metadata(msys).is_ok_and(|s| s.is_file()) {
+            return Ok(msys.to_string());
         }
 
-        // 3) Proje bin dizini
-        let local_bin = "D:\\glsl_extended\\bin\\glsl_validator.exe";
-        if fs::metadata(local_bin).is_ok_and(|s| s.is_file()) {
-            return Ok(local_bin.to_string());
-        }
-
-        Err("glsl_validator binary bulunamadi. Lutfen C:\\msys64\\ucrt64\\bin veya PATH icinde oldugundan emin olun.".to_string())
+        Err("glsl_validator bulunamadi. Lutfen PATH ortamina ekleyin veya 'cargo install --path glsl_validator' ile kurun.".to_string())
     }
 }
 
