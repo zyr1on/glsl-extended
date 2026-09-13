@@ -1,0 +1,59 @@
+name: Release glsl_validator
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bin_name: glsl_validator.exe
+            asset_name: glsl_validator-x86_64-windows.zip
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            bin_name: glsl_validator
+            asset_name: glsl_validator-x86_64-linux.tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            bin_name: glsl_validator
+            asset_name: glsl_validator-aarch64-macos.tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            bin_name: glsl_validator
+            asset_name: glsl_validator-x86_64-macos.tar.gz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build glsl_validator
+        run: |
+          cargo build --release --target ${{ matrix.target }} --manifest-path glsl_validator/Cargo.toml
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path "glsl_validator/target/${{ matrix.target }}/release/${{ matrix.bin_name }}" -DestinationPath "${{ matrix.asset_name }}"
+
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        run: |
+          tar -czf "${{ matrix.asset_name }}" -C "glsl_validator/target/${{ matrix.target }}/release" "${{ matrix.bin_name }}"
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ matrix.asset_name }}

@@ -10,11 +10,12 @@ use zed::settings::LspSettings;
 use zed_extension_api::{self as zed, LanguageServerId, Result, serde_json};
 
 struct GlslExtendedExtension {
-    cached_binary_path: Option<String>,
+    cached_glsl_analyzer: Option<String>,
+    cached_glsl_validator: Option<String>,
 }
 
 impl GlslExtendedExtension {
-    fn language_server_binary_path(
+    fn find_glsl_analyzer(
         &mut self,
         language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
@@ -25,7 +26,7 @@ impl GlslExtendedExtension {
         }
 
         // 2) Onbellekte gecerli binary?
-        if let Some(path) = &self.cached_binary_path
+        if let Some(path) = &self.cached_glsl_analyzer
             && fs::metadata(path).is_ok_and(|s| s.is_file())
         {
             return Ok(path.clone());
@@ -90,29 +91,90 @@ impl GlslExtendedExtension {
             &zed::LanguageServerInstallationStatus::None,
         );
 
-        self.cached_binary_path = Some(binary_path.clone());
+        self.cached_glsl_analyzer = Some(binary_path.clone());
         Ok(binary_path)
     }
 
-    fn find_glsl_validator(&self, worktree: &zed::Worktree) -> Result<String> {
-        // 1) Worktree / Sistem PATH icinde ara (Windows, Linux, macOS)
+    fn find_glsl_validator(
+        &mut self,
+        _language_server_id: &LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> Result<String> {
+        // 1) PATH'te var mi? (Windows, Linux, macOS)
         if let Some(path) = worktree.which("glsl_validator") {
             return Ok(path);
         }
 
-        // 2) Windows MSYS2 / UCRT64 varsayilan konumu
+        // 2) Onbellekte gecerli mi?
+        if let Some(path) = &self.cached_glsl_validator
+            && fs::metadata(path).is_ok_and(|s| s.is_file())
+        {
+            return Ok(path.clone());
+        }
+
+        // 3) Windows MSYS2 / UCRT64 varsayilan konumu
         let msys = "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe";
         if fs::metadata(msys).is_ok_and(|s| s.is_file()) {
             return Ok(msys.to_string());
         }
 
-        Err("glsl_validator bulunamadi. Lutfen PATH ortamina ekleyin veya 'cargo install --path glsl_validator' ile kurun.".to_string())
+        // 4) Eger GitHub Release varsa otomatik indirmeyi dene
+        let (platform, arch) = zed::current_platform();
+        let ext = if matches!(platform, zed::Os::Windows) { "zip" } else { "tar.gz" };
+        let file_type = if matches!(platform, zed::Os::Windows) {
+            zed::DownloadedFileType::Zip
+        } else {
+            zed::DownloadedFileType::GzipTar
+        };
+
+        let asset_name = format!(
+            "glsl_validator-{arch}-{os}.{ext}",
+            arch = match arch {
+                zed::Architecture::Aarch64 => "aarch64",
+                zed::Architecture::X86    => "x86",
+                zed::Architecture::X8664  => "x86_64",
+            },
+            os = match platform {
+                zed::Os::Mac     => "macos",
+                zed::Os::Linux   => "linux",
+                zed::Os::Windows => "windows",
+            }
+        );
+
+        if let Ok(release) = zed::latest_github_release(
+            "semih/zed-glsl-extended",
+            zed::GithubReleaseOptions {
+                require_assets: true,
+                pre_release: false,
+            },
+        ) {
+            if let Some(asset) = release.assets.iter().find(|a| a.name == asset_name) {
+                let version_dir = format!("glsl_validator-{}", release.version);
+                let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
+                let binary_path = format!("{version_dir}/glsl_validator{exe}");
+
+                if !fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
+                    let _ = zed::download_file(&asset.download_url, &version_dir, file_type);
+                    let _ = zed::make_file_executable(&binary_path);
+                }
+
+                if fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
+                    self.cached_glsl_validator = Some(binary_path.clone());
+                    return Ok(binary_path);
+                }
+            }
+        }
+
+        Err("glsl_validator binary bulunamadi. Lutfen 'cargo install --path glsl_validator' ile kurun veya PATH ortamina ekleyin.".to_string())
     }
 }
 
 impl zed::Extension for GlslExtendedExtension {
     fn new() -> Self {
-        Self { cached_binary_path: None }
+        Self {
+            cached_glsl_analyzer: None,
+            cached_glsl_validator: None,
+        }
     }
 
     fn language_server_command(
@@ -122,12 +184,12 @@ impl zed::Extension for GlslExtendedExtension {
     ) -> Result<zed::Command> {
         match language_server_id.as_ref() {
             "glsl_analyzer" => Ok(zed::Command {
-                command: self.language_server_binary_path(language_server_id, worktree)?,
+                command: self.find_glsl_analyzer(language_server_id, worktree)?,
                 args: vec![],
                 env: Default::default(),
             }),
             "glsl_validator" => Ok(zed::Command {
-                command: self.find_glsl_validator(worktree)?,
+                command: self.find_glsl_validator(language_server_id, worktree)?,
                 args: vec![],
                 env: Default::default(),
             }),
