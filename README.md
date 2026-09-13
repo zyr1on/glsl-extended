@@ -4,6 +4,7 @@ Comprehensive, high-performance GLSL and shader development extension for the **
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zed Extension API](https://img.shields.io/badge/Zed%20Extension%20API-v0.7.0-blue)](https://crates.io/crates/zed_extension_api)
+[![Release](https://img.shields.io/github/v/release/zyr1on/zed-glsl-extended?color=green)](https://github.com/zyr1on/zed-glsl-extended/releases)
 
 ---
 
@@ -20,7 +21,7 @@ Comprehensive, high-performance GLSL and shader development extension for the **
   - **LSP 2 (`glsl_validator`):** Real-time compiler diagnostics and linting powered by `glslangValidator`.
 
 - **Pure Desktop OpenGL 4.6 Semantics:**
-  - No mandatory SPIR-V restrictions: declarations like `out vec3 Normal;` compile without false `location` errors.
+  - No mandatory SPIR-V restrictions: declarations like `out vec3 Normal;` compile cleanly without false `location` errors.
   - Precise line-and-column diagnostic squiggly underlines on syntax or type errors.
 
 - **Cross-Platform Compatibility:**
@@ -44,20 +45,62 @@ Comprehensive, high-performance GLSL and shader development extension for the **
 
 ---
 
-## Requirements
+## Requirements & External Tools
 
-The extension integrates with two core command-line tools:
+This extension coordinates two core external tools to provide a complete IDE experience:
 
-1. **`glsl_analyzer`**: Language server for autocomplete and hover.
-   - Automatically downloaded by Zed on first launch if not already found in your `PATH`.
-   - Pre-built releases: [nolanderc/glsl_analyzer](https://github.com/nolanderc/glsl_analyzer/releases).
+### 1. `glsl_analyzer` (Autocomplete, Hover, Goto Definition)
+- **Automatic:** Zed downloads `glsl_analyzer` automatically on first launch if it is not already found in your system `PATH`.
+- **Manual Download (Optional):** [nolanderc/glsl_analyzer Releases](https://github.com/nolanderc/glsl_analyzer/releases).
 
-2. **`glslangValidator`**: The Khronos reference GLSL compiler used for diagnostics.
-   - **Windows:** Included in the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) or MSYS2 (`pacman -S mingw-w64-ucrt-x86_64-glslang`).
-   - **Linux:** `sudo apt install glslang-tools` (Ubuntu/Debian) or `sudo pacman -S glslang` (Arch).
-   - **macOS:** `brew install glslang`.
+---
 
-3. **`glsl_validator`**: Automatically downloaded from GitHub Releases by Zed on first launch. Can also be built from source using `cargo install --path glsl_validator`.
+### 2. `glslangValidator` (Compiler Diagnostics & Linting)
+`glslangValidator` is the official reference compiler for GLSL maintained by the [Khronos Group](https://github.com/KhronosGroup/glslang). It powers the real-time diagnostic squiggly lines in Zed.
+
+> **Note:** If `glslangValidator` is not found on your system, Zed will show a friendly warning on line 1 reminding you to install it. Autocompletion and syntax highlighting will continue to function normally.
+
+#### How to Install `glslangValidator`:
+
+- **Windows:**
+  - **Option A (Recommended — Vulkan SDK):** Download from [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home) or via winget:
+    ```powershell
+    winget install KhronosGroup.VulkanSDK
+    ```
+  - **Option B (Khronos Official Release):** Download pre-built standalone binaries from [KhronosGroup/glslang Releases](https://github.com/KhronosGroup/glslang/releases) (the archive contains `bin/glslangValidator.exe`). Extract and add `bin/` to your system `PATH`.
+  - **Option C (MSYS2 / UCRT64):**
+    ```bash
+    pacman -S mingw-w64-ucrt-x86_64-glslang
+    ```
+
+- **Linux:**
+  - **Debian / Ubuntu:**
+    ```bash
+    sudo apt update && sudo apt install glslang-tools
+    ```
+  - **Arch Linux:**
+    ```bash
+    sudo pacman -S glslang
+    ```
+  - **Fedora:**
+    ```bash
+    sudo dnf install glslang
+    ```
+
+- **macOS:**
+  - **Homebrew:**
+    ```bash
+    brew install glslang
+    ```
+
+---
+
+### 3. `glsl_validator` (LSP Bridge)
+- **Automatic:** Zed downloads the pre-built `glsl_validator` binary for your OS and architecture automatically from [zyr1on/zed-glsl-extended Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+- **Manual Build (Optional):**
+  ```bash
+  cargo install --path glsl_validator
+  ```
 
 ---
 
@@ -65,7 +108,7 @@ The extension integrates with two core command-line tools:
 
 ### Installing as a Dev Extension in Zed
 
-1. Clone or download this repository:
+1. Clone this repository:
    ```bash
    git clone https://github.com/zyr1on/zed-glsl-extended.git
    ```
@@ -115,6 +158,7 @@ zed-glsl-extended/
 │   └── lib.rs                   # Zed Extension WASM entry point
 ├── Cargo.toml                   # Root package manifest
 ├── extension.toml               # Zed Extension manifest
+├── LICENSE                      # MIT License
 ├── .gitignore                   # Git ignore patterns
 └── README.md                    # Documentation
 ```

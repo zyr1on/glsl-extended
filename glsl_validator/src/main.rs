@@ -21,11 +21,19 @@ fn log(msg: &str) {
     }
 }
 
-fn find_glslang_validator() -> String {
+fn is_in_path(cmd: &str) -> bool {
+    let mut check = Command::new(cmd);
+    check.arg("--version");
+    check.stdout(Stdio::null());
+    check.stderr(Stdio::null());
+    check.status().is_ok()
+}
+
+fn find_glslang_validator() -> Option<String> {
     // 1. Explicit environment variable
     if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
         if Path::new(&env_path).exists() {
-            return env_path;
+            return Some(env_path);
         }
     }
 
@@ -37,7 +45,7 @@ fn find_glslang_validator() -> String {
             "glslangValidator"
         });
         if vk_bin.exists() {
-            return vk_bin.to_string_lossy().to_string();
+            return Some(vk_bin.to_string_lossy().to_string());
         }
     }
 
@@ -46,12 +54,19 @@ fn find_glslang_validator() -> String {
     {
         let msys = "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe";
         if Path::new(msys).exists() {
-            return msys.to_string();
+            return Some(msys.to_string());
         }
     }
 
     // 4. Default to system PATH lookup
-    "glslangValidator".to_string()
+    if is_in_path("glslangValidator") {
+        return Some("glslangValidator".to_string());
+    }
+    if is_in_path("glslang") {
+        return Some("glslang".to_string());
+    }
+
+    None
 }
 
 fn get_stage_from_uri(uri: &str, text: &str) -> &'static str {
@@ -98,10 +113,26 @@ fn get_stage_from_uri(uri: &str, text: &str) -> &'static str {
 
 fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
     let stage = get_stage_from_uri(uri, text);
-    let compiler = find_glslang_validator();
-    log(&format!("Validating uri='{uri}', stage='{stage}', compiler='{compiler}'"));
-
     let mut diagnostics = Vec::new();
+
+    let compiler = match find_glslang_validator() {
+        Some(c) => c,
+        None => {
+            log("WARNING: glslangValidator not found on system.");
+            diagnostics.push(json!({
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 999 }
+                },
+                "severity": 2, // Warning
+                "source": "glsl_validator",
+                "message": "glslangValidator not found. Please install Vulkan SDK or glslang to enable compile-time linting (see extension README)."
+            }));
+            return diagnostics;
+        }
+    };
+
+    log(&format!("Validating uri='{uri}', stage='{stage}', compiler='{compiler}'"));
 
     // Pure Desktop OpenGL validation:
     // We intentionally omit -G or -V here, because -G forces SPIR-V binary generation
