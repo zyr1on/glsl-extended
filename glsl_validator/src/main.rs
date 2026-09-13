@@ -291,6 +291,257 @@ fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Valu
     diagnostics
 }
 
+pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
+    let segments: Vec<&str> = expr.split('.').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return 4;
+    }
+
+    let last = match segments.last() {
+        Some(l) => *l,
+        None => return 4,
+    };
+
+    // 1. If `last` is already a swizzle (e.g. `pos.xyz.` or `a.xy.`)
+    if last.len() >= 2 && last.chars().all(|c| "xyzwrugbastpq".contains(c)) {
+        return match last.len() {
+            2 => 2,
+            3 => 3,
+            _ => 4,
+        };
+    }
+
+    // 2. Built-in GLSL vector variables
+    match last {
+        "gl_Position" | "gl_FragCoord" | "gl_FragColor" | "gl_Vertex" | "gl_Color" => return 4,
+        "gl_Normal" | "gl_GlobalInvocationID" | "gl_LocalInvocationID" | "gl_WorkGroupID" => return 3,
+        "gl_PointCoord" => return 2,
+        _ => {}
+    }
+
+    // 3. Scan document for variable or struct member declaration
+    for line in doc.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            continue;
+        }
+
+        if let Some(idx) = line.find(last) {
+            let before = &line[..idx];
+            let after = &line[idx + last.len()..];
+            let before_ok = before.chars().last().is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            let after_ok = after.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_');
+
+            if before_ok && after_ok {
+                if before.contains("vec4") {
+                    return 4;
+                } else if before.contains("vec3") {
+                    return 3;
+                } else if before.contains("vec2") {
+                    return 2;
+                }
+            }
+        }
+    }
+
+    // 4. Heuristics from identifier name
+    let lower = last.to_lowercase();
+    if lower.contains("uv") || lower.contains("coord2d") {
+        2
+    } else if lower.contains("normal") || lower.contains("dir") || lower.contains("vel") {
+        3
+    } else {
+        4
+    }
+}
+
+pub fn generate_swizzle_completions(dim: usize) -> Vec<Value> {
+    let mut items = Vec::new();
+
+    let mut add_item = |label: &str, detail: &str, doc: &str, sort_prefix: &str| {
+        items.push(json!({
+            "label": label,
+            "kind": 5, // Field
+            "detail": detail,
+            "documentation": doc,
+            "insertText": label,
+            "sortText": format!("{}_{}", sort_prefix, label)
+        }));
+    };
+
+    match dim {
+        2 => {
+            // 1-component (float)
+            add_item("x", "float", "X coordinate component", "01");
+            add_item("y", "float", "Y coordinate component", "01");
+            add_item("r", "float", "Red color component", "01");
+            add_item("g", "float", "Green color component", "01");
+            add_item("s", "float", "S texture coordinate", "01");
+            add_item("t", "float", "T texture coordinate", "01");
+
+            // 2-component (vec2)
+            add_item("xy", "vec2", "XY 2D coordinate swizzle", "02");
+            add_item("yx", "vec2", "YX reversed 2D coordinate swizzle", "02");
+            add_item("xx", "vec2", "XX duplicate swizzle", "02");
+            add_item("yy", "vec2", "YY duplicate swizzle", "02");
+            add_item("rg", "vec2", "RG 2D color swizzle", "02");
+            add_item("gr", "vec2", "GR reversed color swizzle", "02");
+            add_item("st", "vec2", "ST 2D texture coordinate swizzle", "02");
+            add_item("ts", "vec2", "TS reversed texture swizzle", "02");
+
+            // 3-component (vec3)
+            add_item("xxx", "vec3", "XXX 3D swizzle", "03");
+            add_item("xyx", "vec3", "XYX 3D swizzle", "03");
+            add_item("xyy", "vec3", "XYY 3D swizzle", "03");
+            add_item("rgb", "vec3", "RGB 3D color swizzle", "03");
+        }
+        3 => {
+            // 1-component (float)
+            add_item("x", "float", "X coordinate component", "01");
+            add_item("y", "float", "Y coordinate component", "01");
+            add_item("z", "float", "Z coordinate component", "01");
+            add_item("r", "float", "Red color component", "01");
+            add_item("g", "float", "Green color component", "01");
+            add_item("b", "float", "Blue color component", "01");
+            add_item("s", "float", "S texture coordinate", "01");
+            add_item("t", "float", "T texture coordinate", "01");
+            add_item("p", "float", "P texture coordinate", "01");
+
+            // 2-component (vec2)
+            add_item("xy", "vec2", "XY 2D coordinate swizzle", "02");
+            add_item("xz", "vec2", "XZ 2D coordinate swizzle", "02");
+            add_item("yz", "vec2", "YZ 2D coordinate swizzle", "02");
+            add_item("yx", "vec2", "YX 2D coordinate swizzle", "02");
+            add_item("zx", "vec2", "ZX 2D coordinate swizzle", "02");
+            add_item("zy", "vec2", "ZY 2D coordinate swizzle", "02");
+            add_item("rg", "vec2", "RG color swizzle", "02");
+            add_item("rb", "vec2", "RB color swizzle", "02");
+            add_item("gb", "vec2", "GB color swizzle", "02");
+
+            // 3-component (vec3)
+            add_item("xyz", "vec3", "XYZ 3D coordinate swizzle", "03");
+            add_item("xzy", "vec3", "XZY 3D coordinate swizzle", "03");
+            add_item("yxz", "vec3", "YXZ 3D coordinate swizzle", "03");
+            add_item("yzx", "vec3", "YZX 3D coordinate swizzle", "03");
+            add_item("zxy", "vec3", "ZXY 3D coordinate swizzle", "03");
+            add_item("zyx", "vec3", "ZYX reversed 3D coordinate swizzle", "03");
+            add_item("rgb", "vec3", "RGB 3D color swizzle", "03");
+            add_item("bgr", "vec3", "BGR reversed 3D color swizzle", "03");
+            add_item("stp", "vec3", "STP 3D texture coordinate swizzle", "03");
+        }
+        _ => {
+            // 1-component (float)
+            add_item("x", "float", "X coordinate component", "01");
+            add_item("y", "float", "Y coordinate component", "01");
+            add_item("z", "float", "Z coordinate component", "01");
+            add_item("w", "float", "W coordinate component", "01");
+            add_item("r", "float", "Red color component", "01");
+            add_item("g", "float", "Green color component", "01");
+            add_item("b", "float", "Blue color component", "01");
+            add_item("a", "float", "Alpha color component", "01");
+            add_item("s", "float", "S texture coordinate", "01");
+            add_item("t", "float", "T texture coordinate", "01");
+            add_item("p", "float", "P texture coordinate", "01");
+            add_item("q", "float", "Q texture coordinate", "01");
+
+            // 2-component (vec2)
+            add_item("xy", "vec2", "XY 2D coordinate swizzle", "02");
+            add_item("xz", "vec2", "XZ 2D coordinate swizzle", "02");
+            add_item("xw", "vec2", "XW 2D coordinate swizzle", "02");
+            add_item("yz", "vec2", "YZ 2D coordinate swizzle", "02");
+            add_item("yw", "vec2", "YW 2D coordinate swizzle", "02");
+            add_item("zw", "vec2", "ZW 2D coordinate swizzle", "02");
+            add_item("rg", "vec2", "RG 2D color swizzle", "02");
+            add_item("rb", "vec2", "RB 2D color swizzle", "02");
+            add_item("ra", "vec2", "RA 2D color swizzle", "02");
+            add_item("gb", "vec2", "GB 2D color swizzle", "02");
+            add_item("ba", "vec2", "BA 2D color swizzle", "02");
+            add_item("st", "vec2", "ST 2D texture coordinate swizzle", "02");
+
+            // 3-component (vec3)
+            add_item("xyz", "vec3", "XYZ 3D coordinate swizzle", "03");
+            add_item("xyw", "vec3", "XYW 3D coordinate swizzle", "03");
+            add_item("xzw", "vec3", "XZW 3D coordinate swizzle", "03");
+            add_item("yzw", "vec3", "YZW 3D coordinate swizzle", "03");
+            add_item("zyx", "vec3", "ZYX reversed 3D coordinate swizzle", "03");
+            add_item("rgb", "vec3", "RGB 3D color swizzle", "03");
+            add_item("bgr", "vec3", "BGR reversed 3D color swizzle", "03");
+            add_item("stp", "vec3", "STP 3D texture coordinate swizzle", "03");
+
+            // 4-component (vec4)
+            add_item("xyzw", "vec4", "XYZW 4D full coordinate swizzle", "04");
+            add_item("wzyx", "vec4", "WZYX reversed coordinate swizzle", "04");
+            add_item("rgba", "vec4", "RGBA 4D full color swizzle", "04");
+            add_item("abgr", "vec4", "ABGR reversed color swizzle", "04");
+            add_item("bgra", "vec4", "BGRA color swizzle", "04");
+            add_item("argb", "vec4", "ARGB color swizzle", "04");
+            add_item("stpq", "vec4", "STPQ 4D full texture swizzle", "04");
+        }
+    }
+
+    // GLSL Vector method: length()
+    items.push(json!({
+        "label": "length()",
+        "kind": 2, // Method
+        "detail": format!("int length() -> {dim}"),
+        "documentation": "Returns the number of components in this vector.",
+        "insertText": "length()",
+        "sortText": "09_length"
+    }));
+
+    items
+}
+
+pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
+    let params = match msg.get("params") {
+        Some(p) => p,
+        None => return json!([]),
+    };
+
+    let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
+    let line_idx = params["position"]["line"].as_u64().unwrap_or(0) as usize;
+    let col_idx = params["position"]["character"].as_u64().unwrap_or(0) as usize;
+
+    let doc = match doc_cache.get(uri) {
+        Some(d) => d,
+        None => return json!([]),
+    };
+
+    let line = match doc.lines().nth(line_idx) {
+        Some(l) => l,
+        None => return json!([]),
+    };
+
+    let col = col_idx.min(line.len());
+    let prefix = &line[..col];
+
+    let trimmed = prefix.trim_end();
+    if !trimmed.ends_with('.') {
+        return json!([]);
+    }
+
+    let before_dot = trimmed[..trimmed.len() - 1].trim_end();
+    let mut start = before_dot.len();
+    for (i, c) in before_dot.char_indices().rev() {
+        if c.is_alphanumeric() || c == '_' || c == '.' {
+            start = i;
+        } else {
+            break;
+        }
+    }
+
+    let expr = &before_dot[start..];
+    if expr.is_empty() {
+        return json!([]);
+    }
+
+    log(&format!("Swizzle completion triggered for expr='{expr}' at line={line_idx}, col={col_idx}"));
+
+    let dim = infer_vector_dimension(doc, expr);
+    let items = generate_swizzle_completions(dim);
+    json!(items)
+}
+
 fn send_lsp_message<W: Write>(writer: &mut W, msg: &Value) -> io::Result<()> {
     let body = serde_json::to_string(msg)?;
     let header = format!("Content-Length: {}\r\n\r\n", body.len());
@@ -367,9 +618,21 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": {
                             "capabilities": {
-                                "textDocumentSync": 1
+                                "textDocumentSync": 1,
+                                "completionProvider": {
+                                    "triggerCharacters": ["."]
+                                }
                             }
                         }
+                    });
+                    send_lsp_message(&mut stdout_lock, &resp)?;
+                }
+                "textDocument/completion" => {
+                    let items = handle_completion(&msg, &doc_cache);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": items
                     });
                     send_lsp_message(&mut stdout_lock, &resp)?;
                 }
@@ -575,5 +838,27 @@ mod tests {
             detect_target_api("// standard vulkan shader\nvoid main() {}", TargetApi::Vulkan),
             TargetApi::Vulkan
         );
+    }
+
+    #[test]
+    fn test_infer_vector_dimension() {
+        let doc = "struct Test {\n    vec4 a;\n    vec2 b;\n};\nvec3 normal;\nTest t;\n";
+        assert_eq!(infer_vector_dimension(doc, "t.a"), 4);
+        assert_eq!(infer_vector_dimension(doc, "t.b"), 2);
+        assert_eq!(infer_vector_dimension(doc, "normal"), 3);
+        assert_eq!(infer_vector_dimension(doc, "t.a.xyz"), 3);
+        assert_eq!(infer_vector_dimension(doc, "gl_Position"), 4);
+    }
+
+    #[test]
+    fn test_generate_swizzle_completions() {
+        let items2 = generate_swizzle_completions(2);
+        assert!(items2.iter().any(|i| i["label"] == "xy"));
+        assert!(items2.iter().any(|i| i["label"] == "length()"));
+
+        let items4 = generate_swizzle_completions(4);
+        assert!(items4.iter().any(|i| i["label"] == "xyzw"));
+        assert!(items4.iter().any(|i| i["label"] == "rgba"));
+        assert!(items4.iter().any(|i| i["label"] == "stpq"));
     }
 }

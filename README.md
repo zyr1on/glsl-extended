@@ -27,6 +27,11 @@ Comprehensive, high-performance GLSL and shader development extension for the **
   - **Zero-Restart Switching:** Toggle dynamically via `settings.json` or per-file `// @target: vulkan` directives.
   - Clear source attribution in diagnostics: `glslangValidator (OpenGL 4.6)` vs `glslangValidator (Vulkan)`.
 
+- **Smart GLSL Vector Swizzling & Chained Member Autocompletion:**
+  - Automatic swizzle completion on vectors (`.xyzw`, `.rgba`, `.stpq`) and `.length()`.
+  - Works seamlessly on standalone variables (`vec4 a; a.`), struct members (`t.a.`), and chained swizzles (`t.a.xyz.`).
+  - Context-aware dimension inference: accurately suggests 2D swizzles for `vec2`, 3D for `vec3`, and 4D for `vec4`.
+
 - **Cross-Platform Compatibility:**
   - Fully compatible with **Windows**, **Linux**, and **macOS** (both Apple Silicon and Intel).
 

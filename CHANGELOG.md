@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.3] — 2026-09-13
 
+### Added
+- **Smart GLSL Vector Swizzling & Chained Member Autocompletion:**
+  - Integrated LSP `textDocument/completion` into `glsl_validator` triggered on `.`.
+  - Intelligently infers vector dimension (2, 3, or 4) from document variable declarations, struct members (`t.a.`), built-in variables, and chained swizzles (`t.a.xyz.`).
+  - Provides coordinate swizzles (`.xyzw`), color swizzles (`.rgba`), texture swizzles (`.stpq`), and `.length()` method completions with high-priority sorting.
+
 ### Fixed
 - **`glsl_analyzer` Nested `bin/` Directory Resolution:**
   - Resolved `failed to spawn command (os error 2)` caused by `glsl_analyzer` release archives extracting the executable inside a `bin/` subfolder (`glsl_analyzer-vX/bin/glsl_analyzer.exe`).
