@@ -21,10 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `struct`: Generic struct declaration template.
     - `func`: Generic function signature template.
     - `main`: Clean `void main() { ... }` entrypoint template.
-- **Code Formatting via `clang-format` (`textDocument/formatting`):**
+- **Hybrid Code Formatting (`textDocument/formatting`):**
   - Advertised `"documentFormattingProvider": true` in `glsl_validator`.
-  - Automatically locates `clang-format` from `CLANG_FORMAT_PATH`, Windows MSYS2 (`C:\msys64\ucrt64\bin\clang-format.exe`), or system `PATH`.
-  - Runs formatting with `--assume-filename` to preserve GLSL style, returning full document edits on save or on demand.
+  - Seamless dual-engine formatting:
+    - **Primary Engine:** Uses `clang-format` if detected on `PATH`, `CLANG_FORMAT_PATH`, or Windows MSYS2 UCRT64.
+    - **Built-in Pure Rust Fallback:** Automatically activates when `clang-format` is not installed or fails. Handles brace indentation, preprocessor alignment (`#version`, `#include` at column 0), single-blank-line normalization, and whitespace cleanup with zero external dependencies.
+  - Honors client `tabSize` and `insertSpaces` formatting options.
 - **Document Color Provider (`textDocument/documentColor` & `textDocument/colorPresentation`):**
   - Real-time inline color swatch previews for `vec3(...)` and `vec4(...)` color constructors in GLSL shaders.
   - Interactive color picker support via `textDocument/colorPresentation`, allowing users to adjust colors visually and write back formatted `vec3`/`vec4` literals.
@@ -32,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `glsl_validator` automatically resolves the active shader file's directory and passes `-I<parent_dir>`, `-I<parent_dir>/include`, and `-I<parent_dir>/shaders` to `glslangValidator`.
   - Fixes missing `#include` resolution errors when editing modular shader projects with local header files.
 - **Expanded Unit Test Suite:**
-  - Added comprehensive tests for snippet generation, color token parsing, color extraction, and URI path percent-decoding (11 unit tests passing).
+  - Added comprehensive tests for snippet generation, color token parsing, color extraction, URI path percent-decoding, and basic GLSL formatting (12 unit tests passing).
 
 ---
 

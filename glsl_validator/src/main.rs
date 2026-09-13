@@ -725,39 +725,154 @@ fn find_clang_format() -> Option<String> {
     None
 }
 
-pub fn format_document(uri: &str, text: &str) -> Option<Value> {
-    let clang_format = find_clang_format()?;
-    let filename = if let Some(path) = uri_to_path(uri) {
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("shader.glsl")
-            .to_string()
+fn analyze_line_braces(line: &str) -> (usize, usize) {
+    let mut open = 0;
+    let mut close = 0;
+    let mut in_str = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            in_str = !in_str;
+            continue;
+        }
+        if in_str {
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            break; // line comment, ignore rest of line
+        }
+        if c == '{' {
+            open += 1;
+        } else if c == '}' {
+            close += 1;
+        }
+    }
+    (open, close)
+}
+
+pub fn basic_glsl_format(text: &str, tab_size: usize, insert_spaces: bool) -> String {
+    let indent_unit = if insert_spaces {
+        " ".repeat(tab_size.max(1))
     } else {
-        "shader.glsl".to_string()
+        "\t".to_string()
     };
 
-    log(&format!("Formatting doc '{uri}' using '{clang_format}' with assume-filename='{filename}'"));
+    let mut result_lines = Vec::new();
+    let mut current_indent = 0usize;
+    let mut prev_was_blank = false;
 
-    let mut child = Command::new(&clang_format)
-        .args([format!("--assume-filename={filename}")])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    for line in text.lines() {
+        let trimmed = line.trim();
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes());
+        if trimmed.is_empty() {
+            if !prev_was_blank && !result_lines.is_empty() {
+                result_lines.push(String::new());
+                prev_was_blank = true;
+            }
+            continue;
+        }
+        prev_was_blank = false;
+
+        // Preprocessor directives always at column 0
+        if trimmed.starts_with('#') {
+            result_lines.push(trimmed.to_string());
+            continue;
+        }
+
+        let (open_braces, close_braces) = analyze_line_braces(trimmed);
+
+        // Count leading closing braces on the line (e.g. "}", "} else {")
+        let mut leading_closes = 0;
+        for c in trimmed.chars() {
+            if c == '}' {
+                leading_closes += 1;
+            } else if !c.is_whitespace() {
+                break;
+            }
+        }
+
+        let line_indent = if leading_closes > 0 {
+            current_indent.saturating_sub(leading_closes)
+        } else if trimmed.starts_with("case ") || trimmed.starts_with("default:") {
+            current_indent.saturating_sub(1)
+        } else {
+            current_indent
+        };
+
+        let indent_str = indent_unit.repeat(line_indent);
+        result_lines.push(format!("{}{}", indent_str, trimmed));
+
+        current_indent = current_indent
+            .saturating_sub(close_braces)
+            .saturating_add(open_braces);
     }
 
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        log(&format!("clang-format failed with exit code: {:?}", output.status.code()));
-        return None;
+    let mut res = result_lines.join("\n");
+    if text.ends_with('\n') {
+        res.push('\n');
+    }
+    res
+}
+
+pub fn format_document(uri: &str, text: &str, options: Option<&Value>) -> Option<Value> {
+    let tab_size = options
+        .and_then(|o| o.get("tabSize"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(4) as usize;
+    let insert_spaces = options
+        .and_then(|o| o.get("insertSpaces"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let mut formatted = None;
+
+    // 1. Try clang-format first if available
+    if let Some(clang_format) = find_clang_format() {
+        let filename = if let Some(path) = uri_to_path(uri) {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("shader.glsl")
+                .to_string()
+        } else {
+            "shader.glsl".to_string()
+        };
+
+        log(&format!("Formatting doc '{uri}' using '{clang_format}' with assume-filename='{filename}'"));
+
+        if let Ok(mut child) = Command::new(&clang_format)
+            .args([format!("--assume-filename={filename}")])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+
+            if let Ok(output) = child.wait_with_output() {
+                if output.status.success() {
+                    if let Ok(s) = String::from_utf8(output.stdout) {
+                        formatted = Some(s);
+                    }
+                } else {
+                    log(&format!("clang-format exited with status {:?}, falling back to built-in formatter", output.status.code()));
+                }
+            }
+        }
     }
 
-    let formatted = String::from_utf8(output.stdout).ok()?;
-    if formatted == text {
+    // 2. Fallback to built-in basic GLSL formatter
+    let formatted_text = match formatted {
+        Some(f) => f,
+        None => {
+            log("Using built-in GLSL basic formatter fallback.");
+            basic_glsl_format(text, tab_size, insert_spaces)
+        }
+    };
+
+    if formatted_text == text {
         log("Doc is already formatted cleanly, returning empty edits.");
         return Some(json!([]));
     }
@@ -772,7 +887,7 @@ pub fn format_document(uri: &str, text: &str) -> Option<Value> {
                 "start": { "line": 0, "character": 0 },
                 "end": { "line": line_count.saturating_sub(1), "character": last_col }
             },
-            "newText": formatted
+            "newText": formatted_text
         }
     ]))
 }
@@ -1054,9 +1169,10 @@ fn main() -> io::Result<()> {
                 }
                 "textDocument/formatting" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
+                    let options = msg["params"].get("options");
                     let edits = doc_cache
                         .get(uri)
-                        .and_then(|text| format_document(uri, text))
+                        .and_then(|text| format_document(uri, text, options))
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1379,5 +1495,16 @@ mod tests {
 
         assert!(!colors[1].is_vec4);
         assert_eq!(colors[1].g, 1.0);
+    }
+
+    #[test]
+    fn test_basic_glsl_format() {
+        let unformatted = "#version 460 core\nvoid main()\n{\nif (true) {\ngl_Position = vec4(1.0);\n} else {\ngl_Position = vec4(0.0);\n}\n}\n";
+        let formatted = basic_glsl_format(unformatted, 4, true);
+        assert!(formatted.contains("    if (true) {"));
+        assert!(formatted.contains("        gl_Position = vec4(1.0);"));
+        assert!(formatted.contains("    } else {"));
+        assert!(formatted.contains("        gl_Position = vec4(0.0);"));
+        assert!(formatted.starts_with("#version 460 core"));
     }
 }

@@ -45,10 +45,10 @@ Comprehensive, high-performance GLSL and shader development extension for the **
     - `func`: Generic function declaration with parameter placeholders.
     - `main`: Clean `void main() { ... }` shader entrypoint.
 
-- **Automatic Code Formatting (`clang-format`):**
-  - Full `textDocument/formatting` support powered by `clang-format`.
-  - Automatically detected from `CLANG_FORMAT_PATH`, Windows MSYS2 UCRT64, or system `PATH`.
-  - Formats GLSL cleanly on save (`editor: format`) using `--assume-filename`.
+- **Hybrid Code Formatting (`textDocument/formatting`):**
+  - Full `textDocument/formatting` support on save (`format_on_save`) or on demand (`editor: format`).
+  - **Clang-Format Engine:** Uses `clang-format` if detected on `PATH`, `CLANG_FORMAT_PATH`, or Windows MSYS2 UCRT64.
+  - **Zero-Dependency Built-in Fallback:** Automatically active when `clang-format` is not installed or fails. Seamlessly indents braces, handles `#version` / `#include` preprocessor column alignment, normalizes blank lines, and cleans whitespace in pure Rust.
 
 - **Interactive Document Color Swatches & Picker:**
   - Real-time inline color swatch previews for `vec3(...)` and `vec4(...)` color literals in shaders.
