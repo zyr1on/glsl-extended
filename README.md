@@ -8,6 +8,9 @@ Comprehensive GLSL and shader development extension for the Zed Editor, featurin
 
 ---
 
+https://github.com/user-attachments/assets/099cb7fd-e0f8-4d99-85d5-78c109008ca2
+
+---
 ## Features
 
 - **Rich Tree-sitter Syntax Highlighting:**
