@@ -121,7 +121,7 @@ This extension coordinates two core external tools to provide a complete IDE exp
 
 ### Configuration (`settings.json`)
 
-Add or verify the following configuration in your Zed settings (`Ctrl+,` or `%APPDATA%\Zed\settings.json`):
+Add or verify the following configuration in your Zed settings (`Ctrl+,` or `Ctrl+Shift+P` -> `zed: open settings`):
 
 ```json
 {
@@ -133,6 +133,52 @@ Add or verify the following configuration in your Zed settings (`Ctrl+,` or `%AP
         }
     }
 }
+```
+
+#### Switching Validation Target (OpenGL 4.6 vs. Vulkan)
+
+By default, `glsl_validator` validates against **pure Desktop OpenGL 4.6** (`-C`), allowing standard declarations like `out vec3 Normal;` without mandatory SPIR-V layout locations.
+
+If you are developing for **Vulkan**, you can configure the target API in two ways:
+
+##### Method A: In `settings.json` (Global or Workspace `.zed/settings.json`)
+
+Open Command Palette (`Ctrl+Shift+P`), choose **`zed: open settings`** (or **`zed: open local settings`** for project-specific settings) and set:
+
+```json
+{
+    "lsp": {
+        "glsl_validator": {
+            "initialization_options": {
+                "target_api": "vulkan" // "opengl" (default) or "vulkan"
+            }
+        }
+    }
+}
+```
+
+##### Method B: Per-File Inline Directive (Quick Toggle)
+
+You can also override the target API on a per-file basis without touching your settings! Simply place a directive in the first few lines of your shader:
+
+```glsl
+// @target: vulkan
+#version 460 core
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 0) out vec4 outColor;
+
+void main() {
+    outColor = vec4(inPosition, 1.0);
+}
+```
+
+Or for OpenGL:
+```glsl
+// @target: opengl
+#version 460 core
+
+out vec4 outColor; // Completely valid in OpenGL mode!
 ```
 
 ---

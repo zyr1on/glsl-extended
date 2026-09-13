@@ -111,8 +111,63 @@ fn get_stage_from_uri(uri: &str, text: &str) -> &'static str {
     }
 }
 
-fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetApi {
+    OpenGl,
+    Vulkan,
+}
+
+impl TargetApi {
+    pub fn parse_target(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("vulkan") || s.eq_ignore_ascii_case("vk") {
+            TargetApi::Vulkan
+        } else {
+            TargetApi::OpenGl
+        }
+    }
+
+    pub fn flag(&self) -> &'static str {
+        match self {
+            TargetApi::OpenGl => "-C",
+            TargetApi::Vulkan => "-V",
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            TargetApi::OpenGl => "OpenGL 4.6",
+            TargetApi::Vulkan => "Vulkan",
+        }
+    }
+}
+
+pub fn detect_target_api(text: &str, default_target: TargetApi) -> TargetApi {
+    for line in text.lines().take(10) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("#pragma") {
+            let lower = trimmed.to_lowercase();
+            if lower.contains("@target: vulkan")
+                || lower.contains("@target:vulkan")
+                || lower.contains("@api: vulkan")
+                || lower.contains("target(vulkan)")
+            {
+                return TargetApi::Vulkan;
+            }
+            if lower.contains("@target: opengl")
+                || lower.contains("@target:opengl")
+                || lower.contains("@api: opengl")
+                || lower.contains("target(opengl)")
+            {
+                return TargetApi::OpenGl;
+            }
+        }
+    }
+    default_target
+}
+
+fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Value> {
     let stage = get_stage_from_uri(uri, text);
+    let target = detect_target_api(text, default_target);
     let mut diagnostics = Vec::new();
 
     let compiler = match find_glslang_validator() {
@@ -132,14 +187,14 @@ fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
         }
     };
 
-    log(&format!("Validating uri='{uri}', stage='{stage}', compiler='{compiler}'"));
+    log(&format!(
+        "Validating uri='{uri}', stage='{stage}', target='{:?}' (flag='{}'), compiler='{compiler}'",
+        target,
+        target.flag()
+    ));
 
-    // Pure Desktop OpenGL validation:
-    // We intentionally omit -G or -V here, because -G forces SPIR-V binary generation
-    // which strictly mandates layout(location = X) on all in/out variables.
-    // Pure OpenGL 4.6 GLSL allows standard `out vec3 Normal;` declarations!
     let mut child = match Command::new(&compiler)
-        .args(["--stdin", "-C", "--error-column", "-S", stage])
+        .args(["--stdin", target.flag(), "--error-column", "-S", stage])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -219,6 +274,7 @@ fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
         };
 
         let clean_msg = message.trim_start_matches("'' :").trim().to_string();
+        let source_label = format!("glslangValidator ({})", target.display_name());
 
         diagnostics.push(json!({
             "range": {
@@ -226,7 +282,7 @@ fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
                 "end": { "line": line_0, "character": end_col }
             },
             "severity": severity,
-            "source": "glslangValidator",
+            "source": source_label,
             "message": clean_msg
         }));
     }
@@ -251,6 +307,7 @@ fn main() -> io::Result<()> {
     let stdout = io::stdout();
     let mut stdout_lock = stdout.lock();
 
+    let mut default_target = TargetApi::OpenGl;
     let mut doc_cache: HashMap<String, String> = HashMap::new();
 
     loop {
@@ -299,6 +356,12 @@ fn main() -> io::Result<()> {
             log(&format!("Handling request id={:?}, method='{method}'", req_id));
             match method {
                 "initialize" => {
+                    if let Some(opts) = msg["params"].get("initializationOptions") {
+                        if let Some(t) = opts.get("target_api").and_then(|v| v.as_str()) {
+                            default_target = TargetApi::parse_target(t);
+                            log(&format!("Initialized with target_api={:?}", default_target));
+                        }
+                    }
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -338,6 +401,37 @@ fn main() -> io::Result<()> {
                 log("Received exit notification.");
                 std::process::exit(0);
             }
+            "workspace/didChangeConfiguration" => {
+                log("Received workspace/didChangeConfiguration notification.");
+                if let Some(settings) = msg["params"].get("settings") {
+                    let mut new_target = None;
+                    if let Some(t) = settings.get("target_api").and_then(|v| v.as_str()) {
+                        new_target = Some(TargetApi::parse_target(t));
+                    } else if let Some(t) = settings.get("glsl_validator").and_then(|g| g.get("target_api")).and_then(|v| v.as_str()) {
+                        new_target = Some(TargetApi::parse_target(t));
+                    } else if let Some(t) = settings.get("initialization_options").and_then(|g| g.get("target_api")).and_then(|v| v.as_str()) {
+                        new_target = Some(TargetApi::parse_target(t));
+                    }
+                    if let Some(nt) = new_target {
+                        if nt != default_target {
+                            log(&format!("Updated default_target from {:?} to {:?}", default_target, nt));
+                            default_target = nt;
+                            for (uri, text) in &doc_cache {
+                                let diagnostics = validate_shader(uri, text, default_target);
+                                let notif = json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "textDocument/publishDiagnostics",
+                                    "params": {
+                                        "uri": uri,
+                                        "diagnostics": diagnostics
+                                    }
+                                });
+                                send_lsp_message(&mut stdout_lock, &notif)?;
+                            }
+                        }
+                    }
+                }
+            }
             "textDocument/didOpen" => {
                 if let Some(doc) = msg["params"]["textDocument"].as_object() {
                     let uri = doc.get("uri").and_then(|u| u.as_str()).unwrap_or("");
@@ -345,7 +439,7 @@ fn main() -> io::Result<()> {
                     log(&format!("didOpen: {uri} (length={})", text.len()));
 
                     doc_cache.insert(uri.to_string(), text.to_string());
-                    let diagnostics = validate_shader(uri, text);
+                    let diagnostics = validate_shader(uri, text, default_target);
 
                     let notif = json!({
                         "jsonrpc": "2.0",
@@ -366,7 +460,7 @@ fn main() -> io::Result<()> {
                             if let Some(text) = first_change["text"].as_str() {
                                 log(&format!("didChange: {uri} (length={})", text.len()));
                                 doc_cache.insert(uri.to_string(), text.to_string());
-                                let diagnostics = validate_shader(uri, text);
+                                let diagnostics = validate_shader(uri, text, default_target);
 
                                 let notif = json!({
                                     "jsonrpc": "2.0",
@@ -387,7 +481,7 @@ fn main() -> io::Result<()> {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     log(&format!("didSave: {uri}"));
                     if let Some(text) = doc_cache.get(uri) {
-                        let diagnostics = validate_shader(uri, text);
+                        let diagnostics = validate_shader(uri, text, default_target);
                         let notif = json!({
                             "jsonrpc": "2.0",
                             "method": "textDocument/publishDiagnostics",
@@ -446,5 +540,40 @@ mod tests {
         assert_eq!(get_stage_from_uri("file:///project/shader.glsl", "void main() { gl_Position = vec4(1.0); }"), "vert");
         assert_eq!(get_stage_from_uri("file:///project/shader.glsl", "void main() { gl_FragCoord.xy; }"), "frag");
         assert_eq!(get_stage_from_uri("file:///project/shader.glslh", "// header file"), "vert");
+    }
+
+    #[test]
+    fn test_target_api_parsing() {
+        assert_eq!(TargetApi::parse_target("vulkan"), TargetApi::Vulkan);
+        assert_eq!(TargetApi::parse_target("Vulkan"), TargetApi::Vulkan);
+        assert_eq!(TargetApi::parse_target("vk"), TargetApi::Vulkan);
+        assert_eq!(TargetApi::parse_target("opengl"), TargetApi::OpenGl);
+        assert_eq!(TargetApi::parse_target("OpenGL"), TargetApi::OpenGl);
+        assert_eq!(TargetApi::parse_target("gl"), TargetApi::OpenGl);
+        assert_eq!(TargetApi::parse_target("anything_else"), TargetApi::OpenGl);
+    }
+
+    #[test]
+    fn test_detect_target_api_directives() {
+        assert_eq!(
+            detect_target_api("// @target: vulkan\nvoid main() {}", TargetApi::OpenGl),
+            TargetApi::Vulkan
+        );
+        assert_eq!(
+            detect_target_api("/* @target: vulkan */\nvoid main() {}", TargetApi::OpenGl),
+            TargetApi::Vulkan
+        );
+        assert_eq!(
+            detect_target_api("#pragma target(vulkan)\nvoid main() {}", TargetApi::OpenGl),
+            TargetApi::Vulkan
+        );
+        assert_eq!(
+            detect_target_api("// standard opengl shader\nvoid main() {}", TargetApi::OpenGl),
+            TargetApi::OpenGl
+        );
+        assert_eq!(
+            detect_target_api("// standard vulkan shader\nvoid main() {}", TargetApi::Vulkan),
+            TargetApi::Vulkan
+        );
     }
 }
