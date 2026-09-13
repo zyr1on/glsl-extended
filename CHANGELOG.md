@@ -1,9 +1,22 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to the **GLSL Extended** extension for the Zed Editor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [0.1.3] — 2026-09-13
+
+### Fixed
+- **`glsl_analyzer` Nested `bin/` Directory Resolution:**
+  - Resolved `failed to spawn command (os error 2)` caused by `glsl_analyzer` release archives extracting the executable inside a `bin/` subfolder (`glsl_analyzer-vX/bin/glsl_analyzer.exe`).
+  - Added robust candidate resolution that checks both `{version_dir}/bin/glsl_analyzer{exe}` and `{version_dir}/glsl_analyzer{exe}`.
+- **Linux Musl Release Asset Naming:**
+  - Corrected asset matching on Linux to use `x86_64-linux-musl.zip` and `aarch64-linux-musl.zip`.
+- **`glsl_validator` Path Fallback:**
+  - Added dual candidate checks for `{version_dir}/glsl_validator` and `{version_dir}/bin/glsl_validator`.
 
 ---
 

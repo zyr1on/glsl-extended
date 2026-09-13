@@ -50,19 +50,15 @@ impl GlslExtendedExtension {
         )?;
 
         let (platform, arch) = zed::current_platform();
-        let asset_name = format!(
-            "{arch}-{os}.zip",
-            arch = match arch {
-                zed::Architecture::Aarch64 => "aarch64",
-                zed::Architecture::X86    => "x86",
-                zed::Architecture::X8664  => "x86_64",
-            },
-            os = match platform {
-                zed::Os::Mac     => "macos",
-                zed::Os::Linux   => "linux",
-                zed::Os::Windows => "windows",
-            }
-        );
+        let asset_name = match (platform, arch) {
+            (zed::Os::Windows, zed::Architecture::X8664) => "x86_64-windows.zip",
+            (zed::Os::Windows, zed::Architecture::Aarch64) => "aarch64-windows.zip",
+            (zed::Os::Linux, zed::Architecture::X8664) => "x86_64-linux-musl.zip",
+            (zed::Os::Linux, zed::Architecture::Aarch64) => "aarch64-linux-musl.zip",
+            (zed::Os::Mac, zed::Architecture::Aarch64) => "aarch64-macos.zip",
+            (zed::Os::Mac, zed::Architecture::X8664) => "x86_64-macos.zip",
+            _ => return Err("Unsupported platform or architecture for glsl_analyzer".to_string()),
+        };
 
         let asset = release
             .assets
@@ -72,9 +68,12 @@ impl GlslExtendedExtension {
 
         let version_dir = format!("glsl_analyzer-{}", release.version);
         let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
-        let binary_path = format!("{version_dir}/glsl_analyzer{exe}");
+        let candidate_bin = format!("{version_dir}/bin/glsl_analyzer{exe}");
+        let candidate_root = format!("{version_dir}/glsl_analyzer{exe}");
 
-        if !fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
+        if !fs::metadata(&candidate_bin).is_ok_and(|s| s.is_file())
+            && !fs::metadata(&candidate_root).is_ok_and(|s| s.is_file())
+        {
             zed::set_language_server_installation_status(
                 language_server_id,
                 &zed::LanguageServerInstallationStatus::Downloading,
@@ -85,9 +84,19 @@ impl GlslExtendedExtension {
                 zed::DownloadedFileType::Zip,
             )
             .map_err(|e| format!("Failed to download glsl_analyzer: {e}"))?;
-
-            zed::make_file_executable(&binary_path)?;
         }
+
+        let binary_path = if fs::metadata(&candidate_bin).is_ok_and(|s| s.is_file()) {
+            candidate_bin
+        } else if fs::metadata(&candidate_root).is_ok_and(|s| s.is_file()) {
+            candidate_root
+        } else {
+            return Err(format!(
+                "glsl_analyzer binary not found in '{candidate_bin}' or '{candidate_root}'"
+            ));
+        };
+
+        let _ = zed::make_file_executable(&binary_path);
 
         zed::set_language_server_installation_status(
             language_server_id,
@@ -156,16 +165,27 @@ impl GlslExtendedExtension {
         {
             let version_dir = format!("glsl_validator-{}", release.version);
             let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
-            let binary_path = format!("{version_dir}/glsl_validator{exe}");
+            let candidate_root = format!("{version_dir}/glsl_validator{exe}");
+            let candidate_bin = format!("{version_dir}/bin/glsl_validator{exe}");
 
-            if !fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
+            if !fs::metadata(&candidate_root).is_ok_and(|s| s.is_file())
+                && !fs::metadata(&candidate_bin).is_ok_and(|s| s.is_file())
+            {
                 let _ = zed::download_file(&asset.download_url, &version_dir, file_type);
-                let _ = zed::make_file_executable(&binary_path);
             }
 
-            if fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
-                self.cached_glsl_validator = Some(binary_path.clone());
-                return Ok(binary_path);
+            let binary_path = if fs::metadata(&candidate_root).is_ok_and(|s| s.is_file()) {
+                Some(candidate_root)
+            } else if fs::metadata(&candidate_bin).is_ok_and(|s| s.is_file()) {
+                Some(candidate_bin)
+            } else {
+                None
+            };
+
+            if let Some(path) = binary_path {
+                let _ = zed::make_file_executable(&path);
+                self.cached_glsl_validator = Some(path.clone());
+                return Ok(path);
             }
         }
 
