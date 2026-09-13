@@ -3,6 +3,8 @@ use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use serde_json::{json, Value};
 
 fn get_log_path() -> PathBuf {
@@ -1272,12 +1274,65 @@ fn send_lsp_message<W: Write>(writer: &mut W, msg: &Value) -> io::Result<()> {
     Ok(())
 }
 
+struct ValidationRequest {
+    uri: String,
+    text: String,
+    target: TargetApi,
+}
+
 fn main() -> io::Result<()> {
     log("=== glsl_validator started ===");
     let stdin = io::stdin();
     let mut stdin_lock = stdin.lock();
-    let stdout = io::stdout();
-    let mut stdout_lock = stdout.lock();
+
+    let (tx_val, rx_val) = mpsc::channel::<ValidationRequest>();
+    let stdout_shared = Arc::new(Mutex::new(io::stdout()));
+
+    let out_for_worker = Arc::clone(&stdout_shared);
+    thread::spawn(move || {
+        while let Ok(mut req) = rx_val.recv() {
+            // Drain queue so rapid keystrokes don't pile up redundant compilations
+            while let Ok(newer) = rx_val.try_recv() {
+                if newer.uri == req.uri {
+                    req = newer;
+                } else {
+                    let diagnostics = validate_shader(&req.uri, &req.text, req.target);
+                    let notif = json!({
+                        "jsonrpc": "2.0",
+                        "method": "textDocument/publishDiagnostics",
+                        "params": {
+                            "uri": req.uri,
+                            "diagnostics": diagnostics
+                        }
+                    });
+                    if let Ok(mut lock) = out_for_worker.lock() {
+                        let _ = send_lsp_message(&mut *lock, &notif);
+                    }
+                    req = newer;
+                }
+            }
+
+            let diagnostics = validate_shader(&req.uri, &req.text, req.target);
+            let notif = json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/publishDiagnostics",
+                "params": {
+                    "uri": req.uri,
+                    "diagnostics": diagnostics
+                }
+            });
+            if let Ok(mut lock) = out_for_worker.lock() {
+                let _ = send_lsp_message(&mut *lock, &notif);
+            }
+        }
+    });
+
+    let send_resp = |msg: &Value| -> io::Result<()> {
+        let mut lock = stdout_shared
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        send_lsp_message(&mut *lock, msg)
+    };
 
     let mut default_target = TargetApi::OpenGl;
     let mut default_engine = FormatterEngine::ClangFormat;
@@ -1354,7 +1409,7 @@ fn main() -> io::Result<()> {
                             }
                         }
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 "textDocument/completion" => {
                     let items = handle_completion(&msg, &doc_cache);
@@ -1363,7 +1418,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": items
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 "textDocument/formatting" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
@@ -1377,7 +1432,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": edits
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 "textDocument/rangeFormatting" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
@@ -1392,7 +1447,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": edits
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 "textDocument/documentColor" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
@@ -1405,7 +1460,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": colors
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 "textDocument/colorPresentation" => {
                     let presentations = handle_color_presentation(&msg, &doc_cache);
@@ -1414,7 +1469,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": presentations
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 "shutdown" => {
                     let resp = json!({
@@ -1422,7 +1477,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": null
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
                 _ => {
                     let resp = json!({
@@ -1430,7 +1485,7 @@ fn main() -> io::Result<()> {
                         "id": req_id,
                         "result": null
                     });
-                    send_lsp_message(&mut stdout_lock, &resp)?;
+                    send_resp(&resp)?;
                 }
             }
             continue;
@@ -1460,16 +1515,11 @@ fn main() -> io::Result<()> {
                             log(&format!("Updated default_target from {:?} to {:?}", default_target, nt));
                             default_target = nt;
                             for (uri, text) in &doc_cache {
-                                let diagnostics = validate_shader(uri, text, default_target);
-                                let notif = json!({
-                                    "jsonrpc": "2.0",
-                                    "method": "textDocument/publishDiagnostics",
-                                    "params": {
-                                        "uri": uri,
-                                        "diagnostics": diagnostics
-                                    }
+                                let _ = tx_val.send(ValidationRequest {
+                                    uri: uri.clone(),
+                                    text: text.clone(),
+                                    target: default_target,
                                 });
-                                send_lsp_message(&mut stdout_lock, &notif)?;
                             }
                         }
                     }
@@ -1493,17 +1543,11 @@ fn main() -> io::Result<()> {
                     log(&format!("didOpen: {uri} (length={})", text.len()));
 
                     doc_cache.insert(uri.to_string(), text.to_string());
-                    let diagnostics = validate_shader(uri, text, default_target);
-
-                    let notif = json!({
-                        "jsonrpc": "2.0",
-                        "method": "textDocument/publishDiagnostics",
-                        "params": {
-                            "uri": uri,
-                            "diagnostics": diagnostics
-                        }
+                    let _ = tx_val.send(ValidationRequest {
+                        uri: uri.to_string(),
+                        text: text.to_string(),
+                        target: default_target,
                     });
-                    send_lsp_message(&mut stdout_lock, &notif)?;
                 }
             }
             "textDocument/didChange" => {
@@ -1514,17 +1558,11 @@ fn main() -> io::Result<()> {
                             if let Some(text) = first_change["text"].as_str() {
                                 log(&format!("didChange: {uri} (length={})", text.len()));
                                 doc_cache.insert(uri.to_string(), text.to_string());
-                                let diagnostics = validate_shader(uri, text, default_target);
-
-                                let notif = json!({
-                                    "jsonrpc": "2.0",
-                                    "method": "textDocument/publishDiagnostics",
-                                    "params": {
-                                        "uri": uri,
-                                        "diagnostics": diagnostics
-                                    }
+                                let _ = tx_val.send(ValidationRequest {
+                                    uri: uri.to_string(),
+                                    text: text.to_string(),
+                                    target: default_target,
                                 });
-                                send_lsp_message(&mut stdout_lock, &notif)?;
                             }
                         }
                     }
@@ -1535,16 +1573,11 @@ fn main() -> io::Result<()> {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     log(&format!("didSave: {uri}"));
                     if let Some(text) = doc_cache.get(uri) {
-                        let diagnostics = validate_shader(uri, text, default_target);
-                        let notif = json!({
-                            "jsonrpc": "2.0",
-                            "method": "textDocument/publishDiagnostics",
-                            "params": {
-                                "uri": uri,
-                                "diagnostics": diagnostics
-                            }
+                        let _ = tx_val.send(ValidationRequest {
+                            uri: uri.to_string(),
+                            text: text.clone(),
+                            target: default_target,
                         });
-                        send_lsp_message(&mut stdout_lock, &notif)?;
                     }
                 }
             }
@@ -1562,7 +1595,7 @@ fn main() -> io::Result<()> {
                             "diagnostics": []
                         }
                     });
-                    send_lsp_message(&mut stdout_lock, &notif)?;
+                    let _ = send_resp(&notif);
                 }
             }
             other => {
