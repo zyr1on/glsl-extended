@@ -1,6 +1,6 @@
 # GLSL Extended — Zed Editor Extension
 
-Comprehensive, high-performance GLSL and shader development extension for the **Zed Editor**, specifically tailored for **OpenGL 4.6 (Core Profile)**.
+Comprehensive, high-performance GLSL and shader development extension for the **Zed Editor**, featuring full support for **OpenGL 4.6 (Core Profile)** and **Vulkan (SPIR-V)**.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zed Extension API](https://img.shields.io/badge/Zed%20Extension%20API-v0.7.0-blue)](https://crates.io/crates/zed_extension_api)
@@ -21,9 +21,11 @@ Comprehensive, high-performance GLSL and shader development extension for the **
   - **LSP 1 (`glsl_analyzer`):** Smart autocompletion, inline hover documentation, and goto-definition.
   - **LSP 2 (`glsl_validator`):** Real-time compiler diagnostics and linting powered by `glslangValidator`.
 
-- **Pure Desktop OpenGL 4.6 Semantics:**
-  - No mandatory SPIR-V restrictions: declarations like `out vec3 Normal;` compile cleanly without false `location` errors.
-  - Precise line-and-column diagnostic squiggly underlines on syntax or type errors.
+- **Dual Target API Validation (OpenGL 4.6 & Vulkan):**
+  - **OpenGL 4.6 (Default):** Validates pure Desktop OpenGL without mandatory SPIR-V layout restrictions (`out vec3 Normal;` compiles cleanly).
+  - **Vulkan (SPIR-V):** Strictly enforces SPIR-V layout locations (`layout(location = 0)`), descriptor sets, and push constants.
+  - **Zero-Restart Switching:** Toggle dynamically via `settings.json` or per-file `// @target: vulkan` directives.
+  - Clear source attribution in diagnostics: `glslangValidator (OpenGL 4.6)` vs `glslangValidator (Vulkan)`.
 
 - **Cross-Platform Compatibility:**
   - Fully compatible with **Windows**, **Linux**, and **macOS** (both Apple Silicon and Intel).
@@ -216,6 +218,12 @@ zed-glsl-extended/
 
 - **Zed logs:** Open Command Palette → `zed: open log`.
 - **Diagnostics bridge logs:** `%LOCALAPPDATA%\Temp\glsl_validator.log` (Windows) or `/tmp/glsl_validator.log` (Linux/macOS).
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes and migration guides across all versions.
 
 ---
 
