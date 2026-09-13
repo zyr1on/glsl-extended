@@ -1,0 +1,19 @@
+# Target directories
+/target/
+glsl_validator/target/
+
+# WASM build outputs
+*.wasm
+extension.wasm
+
+# Cargo lock files (libraries / extensions usually ignore them)
+*.lock
+
+# Zed auto-generated files
+grammars/
+
+# Temporary files and logs
+*.tmp
+*.log
+.DS_Store
+Thumbs.db

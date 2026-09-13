@@ -1,0 +1,18 @@
+name = "GLSL"
+grammar = "glsl"
+path_suffixes = [
+    "vert", "frag", "tesc", "tese", "geom",
+    "comp",
+    "mesh", "task",
+    "rgen", "rint", "rahit", "rchit", "rmiss", "rcall",
+    "glsl", "glslh"
+]
+first_line_pattern = "^#version \\d+"
+line_comments = ["// "]
+block_comment = { start = "/* ", prefix = "* ", end = "*/", tab_size = 1 }
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+]
+language_servers = ["glsl_analyzer", "glsl_validator"]
