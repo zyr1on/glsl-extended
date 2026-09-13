@@ -1,7 +1,7 @@
 id = "glsl-extended"
 name = "GLSL Extended"
 description = "OpenGL 4.6 GLSL support: Tree-sitter syntax highlighting + glsl_analyzer LSP (autocomplete/hover/goto-def) + glsl_validator (glslangValidator compile diagnostics)."
-version = "0.1.0"
+version = "0.1.1"
 schema_version = 1
 authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 repository = "https://github.com/zyr1on/zed-glsl-extended"

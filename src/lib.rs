@@ -151,21 +151,21 @@ impl GlslExtendedExtension {
                 require_assets: true,
                 pre_release: false,
             },
-        ) {
-            if let Some(asset) = release.assets.iter().find(|a| a.name == asset_name) {
-                let version_dir = format!("glsl_validator-{}", release.version);
-                let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
-                let binary_path = format!("{version_dir}/glsl_validator{exe}");
+        )
+            && let Some(asset) = release.assets.iter().find(|a| a.name == asset_name)
+        {
+            let version_dir = format!("glsl_validator-{}", release.version);
+            let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
+            let binary_path = format!("{version_dir}/glsl_validator{exe}");
 
-                if !fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
-                    let _ = zed::download_file(&asset.download_url, &version_dir, file_type);
-                    let _ = zed::make_file_executable(&binary_path);
-                }
+            if !fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
+                let _ = zed::download_file(&asset.download_url, &version_dir, file_type);
+                let _ = zed::make_file_executable(&binary_path);
+            }
 
-                if fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
-                    self.cached_glsl_validator = Some(binary_path.clone());
-                    return Ok(binary_path);
-                }
+            if fs::metadata(&binary_path).is_ok_and(|s| s.is_file()) {
+                self.cached_glsl_validator = Some(binary_path.clone());
+                return Ok(binary_path);
             }
         }
 

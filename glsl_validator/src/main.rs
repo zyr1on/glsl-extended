@@ -423,3 +423,28 @@ fn main() -> io::Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stage_detection_by_extension() {
+        assert_eq!(get_stage_from_uri("file:///project/test.vert", ""), "vert");
+        assert_eq!(get_stage_from_uri("file:///project/test.frag", ""), "frag");
+        assert_eq!(get_stage_from_uri("file:///project/test.geom", ""), "geom");
+        assert_eq!(get_stage_from_uri("file:///project/test.tesc", ""), "tesc");
+        assert_eq!(get_stage_from_uri("file:///project/test.tese", ""), "tese");
+        assert_eq!(get_stage_from_uri("file:///project/test.comp", ""), "comp");
+        assert_eq!(get_stage_from_uri("file:///project/test.mesh", ""), "mesh");
+        assert_eq!(get_stage_from_uri("file:///project/test.task", ""), "task");
+        assert_eq!(get_stage_from_uri("file:///project/test.rgen", ""), "rgen");
+    }
+
+    #[test]
+    fn test_stage_detection_heuristics() {
+        assert_eq!(get_stage_from_uri("file:///project/shader.glsl", "void main() { gl_Position = vec4(1.0); }"), "vert");
+        assert_eq!(get_stage_from_uri("file:///project/shader.glsl", "void main() { gl_FragCoord.xy; }"), "frag");
+        assert_eq!(get_stage_from_uri("file:///project/shader.glslh", "// header file"), "vert");
+    }
+}

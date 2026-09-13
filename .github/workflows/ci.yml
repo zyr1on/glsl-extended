@@ -1,0 +1,44 @@
+﻿name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  check-extension:
+    name: Check Zed WASM Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+          components: clippy
+
+      - name: Cargo Check WASM
+        run: cargo check --target wasm32-wasip2
+
+      - name: Clippy WASM
+        run: cargo clippy --target wasm32-wasip2 -- -D warnings
+
+  check-validator:
+    name: Check glsl_validator Daemon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Check, Clippy and Test glsl_validator
+        working-directory: glsl_validator
+        run: |
+          cargo check
+          cargo clippy -- -D warnings
+          cargo test

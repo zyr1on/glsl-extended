@@ -1,9 +1,10 @@
-﻿# GLSL Extended — Zed Editor Extension
+# GLSL Extended — Zed Editor Extension
 
 Comprehensive, high-performance GLSL and shader development extension for the **Zed Editor**, specifically tailored for **OpenGL 4.6 (Core Profile)**.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zed Extension API](https://img.shields.io/badge/Zed%20Extension%20API-v0.7.0-blue)](https://crates.io/crates/zed_extension_api)
+[![CI](https://github.com/zyr1on/zed-glsl-extended/actions/workflows/ci.yml/badge.svg)](https://github.com/zyr1on/zed-glsl-extended/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zyr1on/zed-glsl-extended?color=green)](https://github.com/zyr1on/zed-glsl-extended/releases)
 
 ---
