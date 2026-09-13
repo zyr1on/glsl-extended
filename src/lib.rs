@@ -125,14 +125,27 @@ impl GlslExtendedExtension {
             return Ok(path.clone());
         }
 
-        // 3) Common Windows MSYS2 / UCRT64 path
-        let msys = "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe";
-        if fs::metadata(msys).is_ok_and(|s| s.is_file()) {
-            return Ok(msys.to_string());
+        let (platform, arch) = zed::current_platform();
+
+        // 3) Common fallback locations per platform
+        let fallbacks: &[&str] = match platform {
+            zed::Os::Windows => &[
+                "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe",
+                "C:\\msys64\\mingw64\\bin\\glsl_validator.exe",
+                "C:\\msys64\\clang64\\bin\\glsl_validator.exe",
+            ],
+            zed::Os::Linux | zed::Os::Mac => &[
+                "/usr/local/bin/glsl_validator",
+                "/usr/bin/glsl_validator",
+            ],
+        };
+        for fallback in fallbacks {
+            if fs::metadata(fallback).is_ok_and(|s| s.is_file()) {
+                return Ok(fallback.to_string());
+            }
         }
 
         // 4) Try downloading pre-built binary from repository GitHub Releases
-        let (platform, arch) = zed::current_platform();
         let ext = if matches!(platform, zed::Os::Windows) { "zip" } else { "tar.gz" };
         let file_type = if matches!(platform, zed::Os::Windows) {
             zed::DownloadedFileType::Zip

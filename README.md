@@ -1,4 +1,4 @@
-﻿# GLSL Extended for Zed
+# GLSL Extended for Zed
 
 Comprehensive GLSL and shader development extension for the Zed Editor, featuring full support for OpenGL 4.6 (Core Profile) and Vulkan (SPIR-V) validation, AST-based formatting, smart vector swizzling, snippets, and Tree-sitter syntax highlighting.
 
@@ -81,7 +81,7 @@ This extension coordinates external tools to provide a complete IDE experience:
 
 `glslangValidator` is the official reference compiler for GLSL maintained by the Khronos Group. It powers real-time diagnostic squiggly lines in Zed.
 
-> **Important:** `glslangValidator` must be installed on your system and accessible via your system `PATH` (or located at standard SDK paths like `VULKAN_SDK/bin` or `C:\msys64\ucrt64\bin`).
+> **Important:** `glslangValidator` must be installed on your system and accessible via your system `PATH` (or standard SDK locations like `VULKAN_SDK/bin`).
 
 #### How to Install `glslangValidator`:
 
@@ -127,12 +127,15 @@ This extension coordinates external tools to provide a complete IDE experience:
 
 ### 3. `clang-format` (Optional, for AST Formatting)
 
-- If installed on your system `PATH` (or `C:\msys64\ucrt64\bin\clang-format.exe`), `glsl_validator` will use it by default for AST-level code formatting.
-- If not installed, formatting automatically falls back to the built-in pure-Rust formatter with zero setup required.
-- To install on Windows:
-  ```bash
-  pacman -S mingw-w64-ucrt-x86_64-clang-tools-extra
-  ```
+- If installed and available on your system `PATH`, `glsl_validator` automatically uses it for AST-level code formatting.
+- If not installed, formatting automatically and seamlessly falls back to the built-in pure-Rust formatter with zero setup required.
+- How to install:
+  - **Windows (winget):** `winget install LLVM.LLVM`
+  - **Windows (MSYS2):** `pacman -S mingw-w64-ucrt-x86_64-clang-tools-extra`
+  - **Debian / Ubuntu:** `sudo apt install clang-format`
+  - **Arch Linux:** `sudo pacman -S clang`
+  - **Fedora:** `sudo dnf install clang-tools-extra`
+  - **macOS:** `brew install clang-format`
 
 ---
 

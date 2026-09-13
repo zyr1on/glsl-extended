@@ -31,7 +31,52 @@ fn log(msg: &str) {
     }
 }
 
+fn find_in_path(binary: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_lowercase())
+            .collect()
+    } else {
+        vec!["".to_string()]
+    };
+
+    for dir in std::env::split_paths(&path_var) {
+        if cfg!(windows) {
+            if binary.contains('.') {
+                let candidate = dir.join(binary);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            } else {
+                for ext in &exts {
+                    let candidate = dir.join(format!("{}{}", binary, ext));
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+                let candidate = dir.join(binary);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        } else {
+            let candidate = dir.join(binary);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 fn is_in_path(cmd: &str) -> bool {
+    if find_in_path(cmd).is_some() {
+        return true;
+    }
     let mut check = Command::new(cmd);
     check.arg("--version");
     check.stdout(Stdio::null());
@@ -40,40 +85,78 @@ fn is_in_path(cmd: &str) -> bool {
 }
 
 fn find_glslang_validator() -> Option<String> {
-    // 1. Explicit environment variable
+    // 1. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
         if Path::new(&env_path).exists() {
             return Some(env_path);
         }
     }
 
-    // 2. Vulkan SDK standard location
-    if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
-        let vk_bin = Path::new(&vk_sdk).join("bin").join(if cfg!(windows) {
-            "glslangValidator.exe"
-        } else {
-            "glslangValidator"
-        });
-        if vk_bin.exists() {
-            return Some(vk_bin.to_string_lossy().to_string());
-        }
+    // 2. Primary: System PATH (universal across Windows, Linux, macOS)
+    if let Some(p) = find_in_path("glslangValidator") {
+        return Some(p.to_string_lossy().to_string());
     }
-
-    // 3. Common Windows MSYS2 / UCRT64 path
-    #[cfg(windows)]
-    {
-        let msys = "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe";
-        if Path::new(msys).exists() {
-            return Some(msys.to_string());
-        }
+    if let Some(p) = find_in_path("glslang") {
+        return Some(p.to_string_lossy().to_string());
     }
-
-    // 4. Default to system PATH lookup
     if is_in_path("glslangValidator") {
         return Some("glslangValidator".to_string());
     }
     if is_in_path("glslang") {
         return Some("glslang".to_string());
+    }
+
+    // 3. Vulkan SDK standard environment variable
+    if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
+        let exe = if cfg!(windows) {
+            "glslangValidator.exe"
+        } else {
+            "glslangValidator"
+        };
+        let vk_bin = Path::new(&vk_sdk).join("bin").join(exe);
+        if vk_bin.is_file() {
+            return Some(vk_bin.to_string_lossy().to_string());
+        }
+    }
+
+    // 4. Platform-specific fallback search paths
+    #[cfg(windows)]
+    {
+        let mut candidates = vec![
+            "C:\\Program Files\\glslang\\bin\\glslangValidator.exe".to_string(),
+            "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe".to_string(),
+            "C:\\msys64\\mingw64\\bin\\glslangValidator.exe".to_string(),
+            "C:\\msys64\\clang64\\bin\\glslangValidator.exe".to_string(),
+        ];
+        if let Ok(entries) = std::fs::read_dir("C:\\VulkanSDK") {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("bin").join("glslangValidator.exe");
+                if candidate.is_file() {
+                    candidates.push(candidate.to_string_lossy().to_string());
+                }
+            }
+        }
+        for path in candidates {
+            if Path::new(&path).is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let candidates = [
+            "/usr/bin/glslangValidator",
+            "/usr/local/bin/glslangValidator",
+            "/opt/homebrew/bin/glslangValidator",
+            "/usr/bin/glslang",
+            "/usr/local/bin/glslang",
+        ];
+        for path in candidates {
+            if Path::new(path).is_file() {
+                return Some(path.to_string());
+            }
+        }
     }
 
     None
@@ -808,26 +891,82 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     json!([])
 }
 
+static WARNED_CLANG_FORMAT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn warn_missing_clang_format() {
+    if WARNED_CLANG_FORMAT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    log("================================================================================");
+    log("NOTICE: 'clang-format' was not found in system PATH or standard locations.");
+    log("Formatting will use the built-in pure-Rust GLSL formatter instead.");
+    log("To use clang-format for AST-level formatting, install it via your package manager:");
+    log("  - Windows (winget):   winget install LLVM.LLVM (or choco install llvm)");
+    log("  - Windows (MSYS2):    pacman -S mingw-w64-ucrt-x86_64-clang-tools-extra");
+    log("  - Debian / Ubuntu:    sudo apt install clang-format");
+    log("  - Fedora / RHEL:      sudo dnf install clang-tools-extra");
+    log("  - Arch Linux:         sudo pacman -S clang");
+    log("  - macOS (Homebrew):   brew install clang-format");
+    log("Alternatively, set CLANG_FORMAT_PATH env var or set \"formatter\": \"builtin\" in settings.");
+    log("================================================================================");
+    eprintln!("[glsl_validator] NOTICE: 'clang-format' not found in PATH. Using built-in pure-Rust formatter.");
+}
+
 fn find_clang_format() -> Option<String> {
-    // 1. Explicit environment variable
+    // 1. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("CLANG_FORMAT_PATH") {
         if Path::new(&env_path).exists() {
             return Some(env_path);
         }
     }
 
-    // 2. Common Windows MSYS2 / UCRT64 path
+    // 2. Primary: System PATH (universal across Windows, Linux, macOS)
+    if let Some(p) = find_in_path("clang-format") {
+        return Some(p.to_string_lossy().to_string());
+    }
+    if is_in_path("clang-format") {
+        return Some("clang-format".to_string());
+    }
+
+    // 3. Platform-specific fallback search paths
     #[cfg(windows)]
     {
-        let msys = "C:\\msys64\\ucrt64\\bin\\clang-format.exe";
-        if Path::new(msys).exists() {
-            return Some(msys.to_string());
+        let mut candidates = vec![
+            "C:\\Program Files\\LLVM\\bin\\clang-format.exe".to_string(),
+            "C:\\Program Files (x86)\\LLVM\\bin\\clang-format.exe".to_string(),
+            "C:\\msys64\\ucrt64\\bin\\clang-format.exe".to_string(),
+            "C:\\msys64\\mingw64\\bin\\clang-format.exe".to_string(),
+            "C:\\msys64\\clang64\\bin\\clang-format.exe".to_string(),
+            "C:\\tools\\llvm\\bin\\clang-format.exe".to_string(),
+        ];
+        if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+            candidates.push(format!("{local_app}\\Programs\\LLVM\\bin\\clang-format.exe"));
+        }
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            candidates.push(format!("{user_profile}\\scoop\\shims\\clang-format.exe"));
+        }
+        for path in candidates {
+            if Path::new(&path).is_file() {
+                return Some(path);
+            }
         }
     }
 
-    // 3. PATH lookup
-    if is_in_path("clang-format") {
-        return Some("clang-format".to_string());
+    #[cfg(not(windows))]
+    {
+        let candidates = [
+            "/usr/bin/clang-format",
+            "/usr/local/bin/clang-format",
+            "/opt/homebrew/bin/clang-format",
+            "/snap/bin/clang-format",
+            "/opt/llvm/bin/clang-format",
+        ];
+        for path in candidates {
+            if Path::new(path).is_file() {
+                return Some(path.to_string());
+            }
+        }
     }
 
     None
@@ -1054,7 +1193,7 @@ pub fn format_document(
                 }
             }
             clang_out.unwrap_or_else(|| {
-                log("clang-format not available or failed; using built-in formatter fallback.");
+                warn_missing_clang_format();
                 basic_glsl_format(text, tab_size, insert_spaces)
             })
         }
@@ -1795,5 +1934,17 @@ mod tests {
             detect_formatter_engine("// @formatter: builtin\nvoid main() {}", FormatterEngine::ClangFormat),
             FormatterEngine::Builtin
         );
+    }
+
+    #[test]
+    fn test_find_in_path() {
+        // "cargo" or "cmd" or "sh" should exist in system PATH on any dev environment
+        let cargo_found = find_in_path("cargo").is_some();
+        let cmd_or_sh = if cfg!(windows) {
+            find_in_path("cmd").is_some() || find_in_path("cmd.exe").is_some()
+        } else {
+            find_in_path("sh").is_some()
+        };
+        assert!(cargo_found || cmd_or_sh);
     }
 }
