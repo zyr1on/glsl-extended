@@ -3,7 +3,7 @@ use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use serde_json::{json, Value};
 
@@ -14,6 +14,14 @@ fn get_log_path() -> PathBuf {
 }
 
 fn log(msg: &str) {
+    static LOG_ENABLED: OnceLock<bool> = OnceLock::new();
+    let enabled = *LOG_ENABLED.get_or_init(|| {
+        std::env::var("GLSL_VALIDATOR_LOG").is_ok() || std::env::var("GLSL_DEBUG").is_ok()
+    });
+    if !enabled {
+        return;
+    }
+
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -467,7 +475,7 @@ pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
     };
 
     // 1. If `last` is already a swizzle (e.g. `pos.xyz.` or `a.xy.`)
-    if last.len() >= 2 && last.chars().all(|c| "xyzwrugbastpq".contains(c)) {
+    if last.len() >= 2 && last.chars().all(|c| "xyzwrgbastpq".contains(c)) {
         return match last.len() {
             2 => 2,
             3 => 3,
