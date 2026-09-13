@@ -2,8 +2,10 @@
 name = "zed-glsl-extended"
 version = "0.1.0"
 edition = "2024"
+authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 description = "Zed GLSL Extended: glsl_analyzer LSP + glslangValidator diagnostics for OpenGL 4.6"
 license = "MIT"
+repository = "https://github.com/zyr1on/zed-glsl-extended"
 
 [lib]
 crate-type = ["cdylib"]

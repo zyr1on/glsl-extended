@@ -1,8 +1,10 @@
-// src/lib.rs  ?  GLSL Extended for Zed
+// src/lib.rs
+//
+// GLSL Extended for Zed Editor
 // =====================================================================
-// Hedef: OpenGL 4.6 (Core Profile)
-// LSP 1: glsl_analyzer  (Autocomplete / Hover / Goto-Definition)
-// LSP 2: glsl_validator (glslangValidator compile diagnostics / linting)
+// Target: OpenGL 4.6 (Core Profile)
+// LSP 1 : glsl_analyzer  (Autocomplete / Hover / Goto-Definition)
+// LSP 2 : glsl_validator (glslangValidator compile diagnostics / linting)
 // =====================================================================
 
 use std::fs;
@@ -15,24 +17,25 @@ struct GlslExtendedExtension {
 }
 
 impl GlslExtendedExtension {
+    /// Locates or downloads the glsl_analyzer language server binary.
     fn find_glsl_analyzer(
         &mut self,
         language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<String> {
-        // 1) PATH'te mi?
+        // 1) Check PATH
         if let Some(path) = worktree.which("glsl_analyzer") {
             return Ok(path);
         }
 
-        // 2) Onbellekte gecerli binary?
+        // 2) Check cached binary
         if let Some(path) = &self.cached_glsl_analyzer
             && fs::metadata(path).is_ok_and(|s| s.is_file())
         {
             return Ok(path.clone());
         }
 
-        // 3) GitHub Release'den otomatik indir
+        // 3) Download automatically from GitHub Releases
         zed::set_language_server_installation_status(
             language_server_id,
             &zed::LanguageServerInstallationStatus::CheckingForUpdate,
@@ -65,7 +68,7 @@ impl GlslExtendedExtension {
             .assets
             .iter()
             .find(|a| a.name == asset_name)
-            .ok_or_else(|| format!("glsl_analyzer asset '{asset_name}' bulunamadi"))?;
+            .ok_or_else(|| format!("Asset '{asset_name}' not found in glsl_analyzer release"))?;
 
         let version_dir = format!("glsl_analyzer-{}", release.version);
         let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
@@ -81,7 +84,7 @@ impl GlslExtendedExtension {
                 &version_dir,
                 zed::DownloadedFileType::Zip,
             )
-            .map_err(|e| format!("glsl_analyzer indirilemedi: {e}"))?;
+            .map_err(|e| format!("Failed to download glsl_analyzer: {e}"))?;
 
             zed::make_file_executable(&binary_path)?;
         }
@@ -95,30 +98,31 @@ impl GlslExtendedExtension {
         Ok(binary_path)
     }
 
+    /// Locates or downloads the glsl_validator language server binary.
     fn find_glsl_validator(
         &mut self,
         _language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<String> {
-        // 1) PATH'te var mi? (Windows, Linux, macOS)
+        // 1) Check PATH (Windows, Linux, macOS)
         if let Some(path) = worktree.which("glsl_validator") {
             return Ok(path);
         }
 
-        // 2) Onbellekte gecerli mi?
+        // 2) Check cached binary
         if let Some(path) = &self.cached_glsl_validator
             && fs::metadata(path).is_ok_and(|s| s.is_file())
         {
             return Ok(path.clone());
         }
 
-        // 3) Windows MSYS2 / UCRT64 varsayilan konumu
+        // 3) Common Windows MSYS2 / UCRT64 path
         let msys = "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe";
         if fs::metadata(msys).is_ok_and(|s| s.is_file()) {
             return Ok(msys.to_string());
         }
 
-        // 4) Eger GitHub Release varsa otomatik indirmeyi dene
+        // 4) Try downloading pre-built binary from repository GitHub Releases
         let (platform, arch) = zed::current_platform();
         let ext = if matches!(platform, zed::Os::Windows) { "zip" } else { "tar.gz" };
         let file_type = if matches!(platform, zed::Os::Windows) {
@@ -142,7 +146,7 @@ impl GlslExtendedExtension {
         );
 
         if let Ok(release) = zed::latest_github_release(
-            "semih/zed-glsl-extended",
+            "zyr1on/zed-glsl-extended",
             zed::GithubReleaseOptions {
                 require_assets: true,
                 pre_release: false,
@@ -165,7 +169,7 @@ impl GlslExtendedExtension {
             }
         }
 
-        Err("glsl_validator binary bulunamadi. Lutfen 'cargo install --path glsl_validator' ile kurun veya PATH ortamina ekleyin.".to_string())
+        Err("glsl_validator binary not found. Please add 'glsl_validator' to your PATH or install it via 'cargo install --path glsl_validator'.".to_string())
     }
 }
 
@@ -193,7 +197,7 @@ impl zed::Extension for GlslExtendedExtension {
                 args: vec![],
                 env: Default::default(),
             }),
-            unknown => Err(format!("Bilinmeyen language server: {unknown}")),
+            unknown => Err(format!("Unknown language server: {unknown}")),
         }
     }
 

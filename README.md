@@ -1,109 +1,145 @@
 ﻿# GLSL Extended — Zed Editor Extension
 
-OpenGL 4.6 (Core Profile) ve modern shader geliştirme için tasarlanmış kapsamlı ve profesyonel **Zed Editor** eklentisi.
+Comprehensive, high-performance GLSL and shader development extension for the **Zed Editor**, specifically tailored for **OpenGL 4.6 (Core Profile)**.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Zed Extension API](https://img.shields.io/badge/Zed%20Extension%20API-v0.7.0-blue)](https://crates.io/crates/zed_extension_api)
 
 ---
 
-## 🌟 Özellikler
+## Features
 
-- **Gelişmiş Tree-sitter Renklendirme (Syntax Highlighting):**
-  - 400+ GLSL veri tipi (`vec2` - `dmat4`, sampler, image, atomic_uint).
-  - Tüm yerleşik GLSL matematik ve doku fonksiyonları (`texture`, `normalize`, `mix`, `fma` vb.).
-  - Yerleşik OpenGL değişkenleri (`gl_Position`, `gl_FragCoord`, `gl_VertexID` vb.).
-  - Node-bağımsız regex eşleme (`#match?`) sayesinde tam kararlılık.
+- **Rich Tree-sitter Syntax Highlighting:**
+  - 400+ built-in GLSL types (`vec2` - `dmat4`, samplers, images, atomic counters).
+  - Built-in GLSL mathematical, geometric, and texture sampling functions (`texture`, `normalize`, `mix`, `fma`, etc.).
+  - Built-in OpenGL shader variables (`gl_Position`, `gl_FragCoord`, `gl_VertexID`, `gl_GlobalInvocationID`, etc.).
+  - Robust identifier-based matching (`#match?`) preventing parser crashes on custom keywords like `discard`.
 
-- **Çift LSP (Dual Language Server) Mimarisi:**
-  - **LSP 1 (`glsl_analyzer`):** Akıllı kod tamamlama (Autocomplete), fareyle üzerine gelme dökümantasyonu (Hover), tanıma gitme (Goto Definition).
-  - **LSP 2 (`glsl_validator`):** `glslangValidator` tabanlı gerçek zamanlı derleme hata tespiti (Diagnostics / kırmızı dalgalı çizgiler).
+- **Dual Language Server Architecture:**
+  - **LSP 1 (`glsl_analyzer`):** Smart autocompletion, inline hover documentation, and goto-definition.
+  - **LSP 2 (`glsl_validator`):** Real-time compiler diagnostics and linting powered by `glslangValidator`.
 
-- **Saf Desktop OpenGL 4.6 Desteği:**
-  - SPIR-V zorunluluğu yoktur; `out vec3 Normal;` gibi standart OpenGL değişkenleri hatasız derlenir.
-  - Kod yazılırken satır ve sütun bazlı anlık hata bildirimi.
+- **Pure Desktop OpenGL 4.6 Semantics:**
+  - No mandatory SPIR-V restrictions: declarations like `out vec3 Normal;` compile without false `location` errors.
+  - Precise line-and-column diagnostic squiggly underlines on syntax or type errors.
+
+- **Cross-Platform Compatibility:**
+  - Fully compatible with **Windows**, **Linux**, and **macOS** (both Apple Silicon and Intel).
 
 ---
 
-## 📂 Desteklenen Dosya Uzantıları
+## Supported Shader Stages & Extensions
 
-| Aşama (Stage) | Uzantılar |
+| Stage | File Extensions |
 |---|---|
 | **Vertex Shader** | `.vert` |
 | **Fragment Shader** | `.frag` |
 | **Geometry Shader** | `.geom` |
-| **Tessellation** | `.tesc`, `.tese` |
+| **Tessellation Control & Eval** | `.tesc`, `.tese` |
 | **Compute Shader** | `.comp` |
-| **Mesh / Task Shader** | `.mesh`, `.task` |
-| **Ray Tracing** | `.rgen`, `.rint`, `.rahit`, `.rchit`, `.rmiss`, `.rcall` |
-| **Genel / Başlık** | `.glsl`, `.glslh` |
-| **Başlık Tespiti** | `#version \d+` ile başlayan tüm dosyalar otomatik GLSL tanınır |
+| **Mesh & Task Shaders** | `.mesh`, `.task` |
+| **Ray Tracing Pipelines** | `.rgen`, `.rint`, `.rahit`, `.rchit`, `.rmiss`, `.rcall` |
+| **Generic GLSL / Headers** | `.glsl`, `.glslh` |
+| **Header Matching** | Any file starting with `#version \d+` is automatically recognized |
 
 ---
 
-## ⚙️ Gereksinimler
+## Requirements
 
-Sisteminizde (PATH üzerinde) aşağıdaki araçların bulunması önerilir:
-1. **`glsl_analyzer.exe`**: [nolanderc/glsl_analyzer Releases](https://github.com/nolanderc/glsl_analyzer/releases) *(PATH'te yoksa eklenti otomatik indirebilir)*
-2. **`glslangValidator.exe`**: [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) veya MSYS2 UCRT64 (`pacman -S mingw-w64-ucrt-x86_64-glslang`)
-3. **`glsl_validator.exe`**: Projenin `bin/` klasöründe hazır derlenmiş olarak mevcuttur veya `glsl_validator` klasöründen `cargo build --release` ile derlenebilir.
+The extension integrates with two core command-line tools:
+
+1. **`glsl_analyzer`**: Language server for autocomplete and hover.
+   - Automatically downloaded by Zed on first launch if not already found in your `PATH`.
+   - Pre-built releases: [nolanderc/glsl_analyzer](https://github.com/nolanderc/glsl_analyzer/releases).
+
+2. **`glslangValidator`**: The Khronos reference GLSL compiler used for diagnostics.
+   - **Windows:** Included in the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) or MSYS2 (`pacman -S mingw-w64-ucrt-x86_64-glslang`).
+   - **Linux:** `sudo apt install glslang-tools` (Ubuntu/Debian) or `sudo pacman -S glslang` (Arch).
+   - **macOS:** `brew install glslang`.
+
+3. **`glsl_validator`**: The lightweight LSP bridge included in this repository under `bin/`.
+   - Can also be built from source using:
+     ```bash
+     cargo install --path glsl_validator
+     ```
 
 ---
 
-## 🚀 Kurulum (Zed Dev Extension)
+## Installation
 
-1. **Rust ve wasm target kurulumu (yalnızca ilk seferde):**
-   ```powershell
-   rustup target add wasm32-wasip2
+### Installing as a Dev Extension in Zed
+
+1. Clone or download this repository:
+   ```bash
+   git clone https://github.com/zyr1on/zed-glsl-extended.git
    ```
+2. Open **Zed**.
+3. Open the Command Palette (`Ctrl+Shift+P` on Windows/Linux, `Cmd+Shift+P` on macOS).
+4. Type and select: **`zed: install dev extension`**.
+5. Choose the cloned `zed-glsl-extended` directory.
+6. Zed will compile the WebAssembly component and activate the extension immediately.
 
-2. **Zed Eklentisini Yükleme:**
-   - Zed editörünü açın.
-   - `Ctrl + Shift + P` basın.
-   - `zed: install dev extension` yazın ve seçin.
-   - Proje klasörünü (`d:\glsl_extended`) seçin.
+### Configuration (`settings.json`)
 
-3. **Zed Ayarları (`settings.json`):**
-   `%APPDATA%\Zed\settings.json` dosyanızda şu blokların bulunduğundan emin olun:
-   ```json
-   {
-       "languages": {
-           "GLSL": {
-               "language_servers": ["glsl_analyzer", "glsl_validator"],
-               "tab_size": 4,
-               "format_on_save": "off"
-           }
-       }
-   }
-   ```
+Add or verify the following configuration in your Zed settings (`Ctrl+,` or `%APPDATA%\Zed\settings.json`):
+
+```json
+{
+    "languages": {
+        "GLSL": {
+            "language_servers": ["glsl_analyzer", "glsl_validator"],
+            "tab_size": 4,
+            "format_on_save": "off"
+        }
+    }
+}
+```
 
 ---
 
-## 📁 Proje Dizin Yapısı
+## Repository Structure
 
 ```
-glsl_extended/
+zed-glsl-extended/
+├── .github/
+│   └── workflows/
+│       └── release.yml          # Automated multi-platform binary release
 ├── bin/
-│   └── glsl_validator.exe       # Önceden derlenmiş linter LSP sunucusu
-├── glsl_validator/              # Linter LSP sunucusunun Rust kaynak kodları
+│   └── glsl_validator.exe       # Pre-built Windows LSP bridge binary
+├── glsl_validator/              # Linter LSP bridge source code
 │   ├── Cargo.toml
 │   └── src/
 │       └── main.rs
 ├── languages/
 │   └── glsl/
-│       ├── brackets.scm         # Parantez eşleştirme
-│       ├── config.toml          # Dil yapılandırması & uzantılar
-│       ├── highlights.scm       # Tree-sitter sözdizimi renklendirme
-│       ├── indents.scm          # Otomatik girintileme
-│       └── outline.scm          # Fonksiyon / sembol ağacı
+│       ├── brackets.scm         # Bracket matching queries
+│       ├── config.toml          # Language metadata and suffixes
+│       ├── highlights.scm       # Tree-sitter syntax highlighting
+│       ├── indents.scm          # Auto-indentation queries
+│       └── outline.scm          # Code outline symbol queries
 ├── src/
-│   └── lib.rs                   # Zed Extension WASM ana kodları
-├── Cargo.toml                   # Rust WASM paket yapılandırması
-├── extension.toml               # Zed Eklenti Manifesti
-├── .gitignore                   # Git yoksayma kuralları
-└── README.md                    # Dökümantasyon
+│   └── lib.rs                   # Zed Extension WASM entry point
+├── Cargo.toml                   # Root package manifest
+├── extension.toml               # Zed Extension manifest
+├── .gitignore                   # Git ignore patterns
+└── README.md                    # Documentation
 ```
 
 ---
 
-## 🔍 Hata Ayıklama & Loglar
+## Troubleshooting
 
-- **Zed Logları:** `Ctrl + Shift + P` → `zed: open log`
-- **glsl_validator Logları:** `%LOCALAPPDATA%\Temp\glsl_validator.log`
+- **Zed logs:** Open Command Palette → `zed: open log`.
+- **Diagnostics bridge logs:** `%LOCALAPPDATA%\Temp\glsl_validator.log` (Windows) or `/tmp/glsl_validator.log` (Linux/macOS).
+
+---
+
+## Author
+
+- **Semih Özdemir** ([@zyr1on](https://github.com/zyr1on)) — `semihozdmirr@gmail.com`
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

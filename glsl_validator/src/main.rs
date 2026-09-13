@@ -50,7 +50,7 @@ fn find_glslang_validator() -> String {
         }
     }
 
-    // 4. Default to PATH lookup
+    // 4. Default to system PATH lookup
     "glslangValidator".to_string()
 }
 
@@ -85,6 +85,7 @@ fn get_stage_from_uri(uri: &str, text: &str) -> &'static str {
     } else if lower.ends_with(".rcall") {
         "rcall"
     } else {
+        // Inspect content heuristics for generic .glsl/.glslh files
         if text.contains("gl_Position") {
             "vert"
         } else if text.contains("gl_FragCoord") || text.contains("gl_FragColor") {
@@ -102,6 +103,10 @@ fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
 
     let mut diagnostics = Vec::new();
 
+    // Pure Desktop OpenGL validation:
+    // We intentionally omit -G or -V here, because -G forces SPIR-V binary generation
+    // which strictly mandates layout(location = X) on all in/out variables.
+    // Pure OpenGL 4.6 GLSL allows standard `out vec3 Normal;` declarations!
     let mut child = match Command::new(&compiler)
         .args(["--stdin", "-C", "--error-column", "-S", stage])
         .stdin(Stdio::piped())
@@ -149,12 +154,17 @@ fn validate_shader(uri: &str, text: &str) -> Vec<Value> {
             &line["WARNING: ".len()..]
         };
 
+        // Skip compilation summary line (e.g. "2 compilation errors. No code generated.")
         if rest.contains("compilation errors") || rest.contains("No code generated") {
             continue;
         }
 
         log(&format!("Raw diagnostic line: {line}"));
 
+        // Format:
+        // 0:line:col: message
+        // 0:line: message
+        // stdin:line:col: message
         let parts: Vec<&str> = rest.splitn(4, ':').collect();
         if parts.len() < 3 {
             continue;
