@@ -220,8 +220,8 @@ out vec4 outColor; // Completely valid in OpenGL mode!
 
 `glsl_extended` provides dual-engine formatting with full support for both whole-document (`editor: format`) and range/selection formatting (`editor: format_selections` / `Ctrl + K, Ctrl + F`):
 
-- **Built-in Pure-Rust Engine (Default):** Zero external dependencies required! Formats instantly on any OS. Handles brace indentation, preprocessor alignment (`#version`, `#include` at column 0), comma spacing (`vec3(1.0, 2.0)`), and blank line normalization.
-- **Clang-Format Engine:** Uses system `clang-format` if available, with automatic fallback to the built-in formatter.
+- **Clang-Format Engine (Default):** Uses system `clang-format` if available (e.g. MSYS2 UCRT64, PATH, or `CLANG_FORMAT_PATH`). Fully parses GLSL AST, cleans up irregular multiline expressions, and indents complex blocks.
+- **Built-in Pure-Rust Engine (Automatic Fallback):** Zero external dependencies required! Automatically active whenever `clang-format` is not installed, or can be forced explicitly. Handles brace indentation, preprocessor alignment (`#version`, `#include` at column 0), comma spacing (`vec3(1.0, 2.0)`), and blank line normalization.
 
 ##### Configuring Formatter in Zed `settings.json`:
 
@@ -243,7 +243,7 @@ Add the following to your Zed `settings.json` (Command Palette → `zed: open se
     "glsl_validator": {
       "initialization_options": {
         "target_api": "opengl",     // "opengl" (default) or "vulkan"
-        "formatter": "builtin"      // "builtin" (default) or "clang-format"
+        "formatter": "clang-format" // "clang-format" (default with pure-Rust fallback) or "builtin"
       }
     }
   }
