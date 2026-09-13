@@ -263,6 +263,19 @@ pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
                     dirs.push(shaders);
                 }
             }
+            if let Some(grandparent) = parent.parent() {
+                if grandparent.exists() {
+                    dirs.push(grandparent.to_path_buf());
+                    let inc = grandparent.join("include");
+                    if inc.exists() && inc.is_dir() && !dirs.contains(&inc) {
+                        dirs.push(inc);
+                    }
+                    let shaders = grandparent.join("shaders");
+                    if shaders.exists() && shaders.is_dir() && !dirs.contains(&shaders) {
+                        dirs.push(shaders);
+                    }
+                }
+            }
         }
     }
     dirs
