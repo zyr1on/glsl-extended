@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -25,9 +25,12 @@ jobs:
       - name: Clippy WASM
         run: cargo clippy --target wasm32-wasip2 -- -D warnings
 
-  check-validator:
-    name: Check glsl_validator Daemon
-    runs-on: ubuntu-latest
+  test-validator:
+    name: Test glsl_validator (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
