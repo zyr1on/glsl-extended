@@ -1,4 +1,4 @@
-name: Release Extension & glsl_validator
+name: Release glsl_validator
 
 on:
   push:
@@ -10,29 +10,6 @@ permissions:
   contents: write
 
 jobs:
-  build-wasm:
-    name: Build extension.wasm (Universal)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust & wasm32-wasip2
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
-
-      - name: Build extension.wasm
-        run: |
-          cargo build --release --target wasm32-wasip2
-          cp target/wasm32-wasip2/release/zed_glsl_extended.wasm extension.wasm
-
-      - name: Upload extension.wasm
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: extension.wasm
-
-  build:
     name: Build glsl_validator (${{ matrix.target }})
     strategy:
       matrix:

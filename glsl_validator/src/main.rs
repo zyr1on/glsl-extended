@@ -1,3 +1,6 @@
+pub mod docs;
+pub mod signature;
+
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
@@ -1601,11 +1604,33 @@ fn main() -> io::Result<()> {
                                 "completionProvider": {
                                     "triggerCharacters": ["."]
                                 },
+                                "signatureHelpProvider": {
+                                    "triggerCharacters": ["(", ","]
+                                },
+                                "hoverProvider": true,
                                 "documentFormattingProvider": true,
                                 "documentRangeFormattingProvider": true,
                                 "colorProvider": true
                             }
                         }
+                    });
+                    send_resp(&resp)?;
+                }
+                "textDocument/signatureHelp" => {
+                    let sig_help = signature::handle_signature_help(&msg, &doc_cache);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": sig_help
+                    });
+                    send_resp(&resp)?;
+                }
+                "textDocument/hover" => {
+                    let hover_info = signature::handle_hover(&msg, &doc_cache);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": hover_info
                     });
                     send_resp(&resp)?;
                 }
