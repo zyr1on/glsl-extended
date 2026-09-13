@@ -8,7 +8,11 @@ Comprehensive GLSL and shader development extension for the Zed Editor, featurin
 
 ---
 
-https://github.com/user-attachments/assets/099cb7fd-e0f8-4d99-85d5-78c109008ca2
+
+
+https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
+
+
 
 ---
 ## Features
