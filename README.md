@@ -231,7 +231,7 @@ Add the following to your Zed `settings.json` (Command Palette → `zed: open se
 {
   "languages": {
     "GLSL": {
-      "format_on_save": "on",
+      "format_on_save": "off",
       "formatter": {
         "language_server": {
           "name": "glsl_validator"
