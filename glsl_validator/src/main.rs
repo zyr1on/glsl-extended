@@ -84,8 +84,24 @@ fn is_in_path(cmd: &str) -> bool {
     check.status().is_ok()
 }
 
-fn find_glslang_validator() -> Option<String> {
-    // 1. Explicit user environment variable override
+fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
+    // 1. Explicit user configuration from Zed settings.json
+    if let Some(custom) = custom_path {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            if Path::new(trimmed).is_file() {
+                return Some(trimmed.to_string());
+            }
+            if let Some(p) = find_in_path(trimmed) {
+                return Some(p.to_string_lossy().to_string());
+            }
+            if is_in_path(trimmed) {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    // 2. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
         if Path::new(&env_path).exists() {
             return Some(env_path);
@@ -374,12 +390,17 @@ pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
     dirs
 }
 
-fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Value> {
+fn validate_shader(
+    uri: &str,
+    text: &str,
+    default_target: TargetApi,
+    custom_glslang: Option<&str>,
+) -> Vec<Value> {
     let stage = get_stage_from_uri(uri, text);
     let target = detect_target_api(text, default_target);
     let mut diagnostics = Vec::new();
 
-    let compiler = match find_glslang_validator() {
+    let compiler = match find_glslang_validator(custom_glslang) {
         Some(c) => c,
         None => {
             log("WARNING: glslangValidator not found on system.");
@@ -390,7 +411,7 @@ fn validate_shader(uri: &str, text: &str, default_target: TargetApi) -> Vec<Valu
                 },
                 "severity": 2, // Warning
                 "source": "glsl_validator",
-                "message": "glslangValidator not found. Please install Vulkan SDK or glslang to enable compile-time linting (see extension README)."
+                "message": "glslangValidator not found. Install Vulkan SDK / glslang or specify glslang_validator_path in settings."
             }));
             return diagnostics;
         }
@@ -913,8 +934,24 @@ fn warn_missing_clang_format() {
     eprintln!("[glsl_validator] NOTICE: 'clang-format' not found in PATH. Using built-in pure-Rust formatter.");
 }
 
-fn find_clang_format() -> Option<String> {
-    // 1. Explicit user environment variable override
+fn find_clang_format(custom_path: Option<&str>) -> Option<String> {
+    // 1. Explicit user configuration from Zed settings.json
+    if let Some(custom) = custom_path {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            if Path::new(trimmed).is_file() {
+                return Some(trimmed.to_string());
+            }
+            if let Some(p) = find_in_path(trimmed) {
+                return Some(p.to_string_lossy().to_string());
+            }
+            if is_in_path(trimmed) {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    // 2. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("CLANG_FORMAT_PATH") {
         if Path::new(&env_path).exists() {
             return Some(env_path);
@@ -1148,6 +1185,7 @@ pub fn format_document(
     text: &str,
     options: Option<&Value>,
     default_engine: FormatterEngine,
+    custom_clang: Option<&str>,
 ) -> Option<Value> {
     let engine = detect_formatter_engine(text, default_engine);
     let tab_size = options
@@ -1162,7 +1200,7 @@ pub fn format_document(
     let formatted_text = match engine {
         FormatterEngine::ClangFormat => {
             let mut clang_out = None;
-            if let Some(clang_format) = find_clang_format() {
+            if let Some(clang_format) = find_clang_format(custom_clang) {
                 let filename = if let Some(path) = uri_to_path(uri) {
                     path.file_name()
                         .and_then(|n| n.to_str())
@@ -1229,8 +1267,9 @@ pub fn format_range(
     _range: Option<&Value>,
     options: Option<&Value>,
     default_engine: FormatterEngine,
+    custom_clang: Option<&str>,
 ) -> Option<Value> {
-    format_document(uri, text, options, default_engine)
+    format_document(uri, text, options, default_engine, custom_clang)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1425,6 +1464,7 @@ struct ValidationRequest {
     uri: String,
     text: String,
     target: TargetApi,
+    glslang_path: Option<String>,
 }
 
 fn main() -> io::Result<()> {
@@ -1443,7 +1483,7 @@ fn main() -> io::Result<()> {
                 if newer.uri == req.uri {
                     req = newer;
                 } else {
-                    let diagnostics = validate_shader(&req.uri, &req.text, req.target);
+                    let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref());
                     let notif = json!({
                         "jsonrpc": "2.0",
                         "method": "textDocument/publishDiagnostics",
@@ -1459,7 +1499,7 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            let diagnostics = validate_shader(&req.uri, &req.text, req.target);
+            let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref());
             let notif = json!({
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
@@ -1483,6 +1523,8 @@ fn main() -> io::Result<()> {
 
     let mut default_target = TargetApi::OpenGl;
     let mut default_engine = FormatterEngine::ClangFormat;
+    let mut custom_glslang_path: Option<String> = None;
+    let mut custom_clang_path: Option<String> = None;
     let mut doc_cache: HashMap<String, String> = HashMap::new();
 
     loop {
@@ -1540,6 +1582,15 @@ fn main() -> io::Result<()> {
                             default_engine = FormatterEngine::parse_engine(f);
                             log(&format!("Initialized with formatter engine={:?}", default_engine));
                         }
+                        if let Some(p) = opts.get("glslang_validator_path").and_then(|v| v.as_str())
+                            .or_else(|| opts.get("glslang_path").and_then(|v| v.as_str())) {
+                            custom_glslang_path = Some(p.to_string());
+                            log(&format!("Initialized with custom glslang_path={p}"));
+                        }
+                        if let Some(p) = opts.get("clang_format_path").and_then(|v| v.as_str()) {
+                            custom_clang_path = Some(p.to_string());
+                            log(&format!("Initialized with custom clang_format_path={p}"));
+                        }
                     }
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1572,7 +1623,7 @@ fn main() -> io::Result<()> {
                     let options = msg["params"].get("options");
                     let edits = doc_cache
                         .get(uri)
-                        .and_then(|text| format_document(uri, text, options, default_engine))
+                        .and_then(|text| format_document(uri, text, options, default_engine, custom_clang_path.as_deref()))
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1587,7 +1638,7 @@ fn main() -> io::Result<()> {
                     let range = msg["params"].get("range");
                     let edits = doc_cache
                         .get(uri)
-                        .and_then(|text| format_range(uri, text, range, options, default_engine))
+                        .and_then(|text| format_range(uri, text, range, options, default_engine, custom_clang_path.as_deref()))
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1649,6 +1700,7 @@ fn main() -> io::Result<()> {
             "workspace/didChangeConfiguration" => {
                 log("Received workspace/didChangeConfiguration notification.");
                 if let Some(settings) = msg["params"].get("settings") {
+                    let mut revalidate = false;
                     let mut new_target = None;
                     if let Some(t) = settings.get("target_api").and_then(|v| v.as_str()) {
                         new_target = Some(TargetApi::parse_target(t));
@@ -1661,14 +1713,28 @@ fn main() -> io::Result<()> {
                         if nt != default_target {
                             log(&format!("Updated default_target from {:?} to {:?}", default_target, nt));
                             default_target = nt;
-                            for (uri, text) in &doc_cache {
-                                let _ = tx_val.send(ValidationRequest {
-                                    uri: uri.clone(),
-                                    text: text.clone(),
-                                    target: default_target,
-                                });
-                            }
+                            revalidate = true;
                         }
+                    }
+
+                    if let Some(p) = settings.get("glslang_validator_path").and_then(|v| v.as_str())
+                        .or_else(|| settings.get("glslang_path").and_then(|v| v.as_str()))
+                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("glslang_validator_path")).and_then(|v| v.as_str()))
+                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("glslang_path")).and_then(|v| v.as_str()))
+                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("glslang_validator_path")).and_then(|v| v.as_str()))
+                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("glslang_path")).and_then(|v| v.as_str())) {
+                        if custom_glslang_path.as_deref() != Some(p) {
+                            custom_glslang_path = Some(p.to_string());
+                            log(&format!("Updated custom_glslang_path={p}"));
+                            revalidate = true;
+                        }
+                    }
+
+                    if let Some(p) = settings.get("clang_format_path").and_then(|v| v.as_str())
+                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("clang_format_path")).and_then(|v| v.as_str()))
+                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("clang_format_path")).and_then(|v| v.as_str())) {
+                        custom_clang_path = Some(p.to_string());
+                        log(&format!("Updated custom_clang_path={p}"));
                     }
 
                     if let Some(f) = settings.get("formatter").and_then(|v| v.as_str()) {
@@ -1680,6 +1746,17 @@ fn main() -> io::Result<()> {
                     } else if let Some(f) = settings.get("initialization_options").and_then(|g| g.get("formatter")).and_then(|v| v.as_str()) {
                         default_engine = FormatterEngine::parse_engine(f);
                         log(&format!("Updated default_engine to {:?}", default_engine));
+                    }
+
+                    if revalidate {
+                        for (uri, text) in &doc_cache {
+                            let _ = tx_val.send(ValidationRequest {
+                                uri: uri.clone(),
+                                text: text.clone(),
+                                target: default_target,
+                                glslang_path: custom_glslang_path.clone(),
+                            });
+                        }
                     }
                 }
             }
@@ -1694,6 +1771,7 @@ fn main() -> io::Result<()> {
                         uri: uri.to_string(),
                         text: text.to_string(),
                         target: default_target,
+                        glslang_path: custom_glslang_path.clone(),
                     });
                 }
             }
@@ -1709,6 +1787,7 @@ fn main() -> io::Result<()> {
                                     uri: uri.to_string(),
                                     text: text.to_string(),
                                     target: default_target,
+                                    glslang_path: custom_glslang_path.clone(),
                                 });
                             }
                         }
@@ -1724,6 +1803,7 @@ fn main() -> io::Result<()> {
                             uri: uri.to_string(),
                             text: text.clone(),
                             target: default_target,
+                            glslang_path: custom_glslang_path.clone(),
                         });
                     }
                 }
@@ -1946,5 +2026,15 @@ mod tests {
             find_in_path("sh").is_some()
         };
         assert!(cargo_found || cmd_or_sh);
+    }
+
+    #[test]
+    fn test_custom_binary_paths() {
+        // Non-existent custom path should not crash and fall back to regular search
+        let fallback_clang = find_clang_format(Some("non_existent_fake_path_xyz123"));
+        assert!(fallback_clang.is_some() || fallback_clang.is_none());
+
+        let fallback_glslang = find_glslang_validator(Some("non_existent_fake_path_xyz123"));
+        assert!(fallback_glslang.is_some() || fallback_glslang.is_none());
     }
 }

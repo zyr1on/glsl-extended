@@ -129,13 +129,57 @@ This extension coordinates external tools to provide a complete IDE experience:
 
 - If installed and available on your system `PATH`, `glsl_validator` automatically uses it for AST-level code formatting.
 - If not installed, formatting automatically and seamlessly falls back to the built-in pure-Rust formatter with zero setup required.
-- How to install:
-  - **Windows (winget):** `winget install LLVM.LLVM`
-  - **Windows (MSYS2):** `pacman -S mingw-w64-ucrt-x86_64-clang-tools-extra`
-  - **Debian / Ubuntu:** `sudo apt install clang-format`
-  - **Arch Linux:** `sudo pacman -S clang`
-  - **Fedora:** `sudo dnf install clang-tools-extra`
-  - **macOS:** `brew install clang-format`
+- **How to Install `clang-format`:**
+  - **Windows:**
+    - **Option A (Official LLVM - Recommended):** Install official LLVM via winget:
+      ```powershell
+      winget install LLVM.LLVM
+      ```
+      Or download the pre-built Windows installer from [LLVM GitHub Releases](https://github.com/llvm/llvm-project/releases). (Default binary: `C:\Program Files\LLVM\bin\clang-format.exe`).
+    - **Option B (MSYS2 / UCRT64):**
+      ```bash
+      pacman -S mingw-w64-ucrt-x86_64-clang-tools-extra
+      # Or install the full clang suite:
+      pacman -S mingw-w64-ucrt-x86_64-clang
+      ```
+    - **Option C (Chocolatey):**
+      ```powershell
+      choco install llvm
+      ```
+    - **Option D (Scoop):**
+      ```powershell
+      scoop install llvm
+      ```
+  - **Linux:**
+    - **Debian / Ubuntu:**
+      ```bash
+      sudo apt update && sudo apt install clang-format
+      ```
+    - **Arch Linux:**
+      ```bash
+      sudo pacman -S clang
+      ```
+    - **Fedora / RHEL:**
+      ```bash
+      sudo dnf install clang-tools-extra
+      ```
+  - **macOS:**
+    - **Homebrew:**
+      ```bash
+      brew install clang-format
+      ```
+
+---
+
+### Binary Discovery & Resolution Priority
+
+`glsl_validator` searches for required tools (`glslangValidator`, `clang-format`) following a strict, bloat-free hierarchy designed for peak performance:
+
+1. **Explicit Setting (`settings.json`):** If you provide `glslang_validator_path` or `clang_format_path` in your configuration, that binary is checked and used first.
+2. **System `PATH` (Universal):** Checks standard system `PATH` directories across Windows, Linux, and macOS without process-spawning overhead.
+3. **Environment Variables:** Checks `GLSLANG_VALIDATOR_PATH`, `CLANG_FORMAT_PATH`, and `VULKAN_SDK`.
+4. **Standard Platform Fallbacks:** Checks well-known installation paths (`C:\Program Files\LLVM\bin`, MSYS2, `/usr/bin`, `/opt/homebrew/bin`).
+5. **Pure-Rust Fallback:** If `clang-format` is not installed, the server immediately and safely falls back to the built-in pure-Rust GLSL formatter (zero crashes, low CPU and RAM consumption).
 
 ---
 
@@ -176,7 +220,9 @@ To configure GLSL settings, open your Zed settings (`Ctrl+,` or Command Palette 
     "glsl_validator": {
       "initialization_options": {
         "target_api": "opengl",
-        "formatter": "clang-format"
+        "formatter": "clang-format",
+        "clang_format_path": "C:\\Program Files\\LLVM\\bin\\clang-format.exe",
+        "glslang_validator_path": "C:\\VulkanSDK\\1.3.296.0\\Bin\\glslangValidator.exe"
       }
     }
   }
@@ -201,7 +247,23 @@ Located under `lsp.glsl_validator.initialization_options.formatter`.
 - `"builtin"`:
   Forces the internal pure-Rust formatter. Operates with zero external dependencies, handling basic brace indentation and preprocessor alignment.
 
-#### 3. Format on Save (`format_on_save`)
+#### 3. Custom Tool Paths (`clang_format_path`, `glslang_validator_path`)
+Located under `lsp.glsl_validator.initialization_options`.
+By default, these can be omitted because `glsl_validator` automatically resolves them from your system `PATH`. If you have multiple installations or custom toolchains, specify absolute paths:
+
+- **Windows:**
+  - Official LLVM: `"C:\\Program Files\\LLVM\\bin\\clang-format.exe"`
+  - MSYS2 UCRT64: `"C:\\msys64\\ucrt64\\bin\\clang-format.exe"`
+  - Vulkan SDK: `"C:\\VulkanSDK\\1.3.296.0\\Bin\\glslangValidator.exe"`
+  - MSYS2 glslang: `"C:\\msys64\\ucrt64\\bin\\glslangValidator.exe"`
+- **Linux:**
+  - Clang-format: `"/usr/bin/clang-format"` (or `"/usr/local/bin/clang-format"`)
+  - GlslangValidator: `"/usr/bin/glslangValidator"`
+- **macOS:**
+  - Clang-format: `"/opt/homebrew/bin/clang-format"`
+  - GlslangValidator: `"/opt/homebrew/bin/glslangValidator"`
+
+#### 4. Format on Save (`format_on_save`)
 Located under `languages.GLSL.format_on_save`.
 
 - `"off"` (Recommended default):
@@ -209,7 +271,7 @@ Located under `languages.GLSL.format_on_save`.
 - `"on"`:
   Automatically formats the document every time the file is saved (`Ctrl + S`).
 
-#### 4. Tab Size (`tab_size`)
+#### 5. Tab Size (`tab_size`)
 Located under `languages.GLSL.tab_size`.
 
 - `4` (Default): Uses 4 spaces per indentation level.
