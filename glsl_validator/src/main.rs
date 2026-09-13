@@ -801,15 +801,18 @@ pub fn clean_glsl_line_syntax(line: &str) -> String {
     let mut result = String::with_capacity(line.len() + 8);
     let mut chars = line.chars().peekable();
     let mut in_str = false;
+    let mut prev_char: Option<char> = None;
 
     while let Some(c) = chars.next() {
         if c == '"' {
             in_str = !in_str;
             result.push(c);
+            prev_char = Some(c);
             continue;
         }
         if in_str {
             result.push(c);
+            prev_char = Some(c);
             continue;
         }
         if c == '/' && chars.peek() == Some(&'/') {
@@ -820,32 +823,58 @@ pub fn clean_glsl_line_syntax(line: &str) -> String {
             break;
         }
 
+        // Collapse multiple spaces outside strings/comments
+        if c == ' ' && prev_char == Some(' ') {
+            continue;
+        }
+
         // Space after comma: e.g. "vec3(1.0,2.0)" -> "vec3(1.0, 2.0)"
         if c == ',' {
             result.push(',');
             if let Some(&next) = chars.peek() {
                 if !next.is_whitespace() {
                     result.push(' ');
+                    prev_char = Some(' ');
+                    continue;
                 }
             }
+            prev_char = Some(',');
             continue;
         }
 
-        // Space before opening brace: e.g. "){" -> ") {"
+        // Space before opening brace: e.g. "struct Test{" -> "struct Test {"
+        if c == '{' && prev_char.is_some_and(|p| !p.is_whitespace()) {
+            result.push(' ');
+        }
+
+        // Space between ')' and '{': e.g. "){" -> ") {"
         if c == ')' {
             result.push(')');
             if let Some(&next) = chars.peek() {
                 if next == '{' {
                     result.push(' ');
+                    prev_char = Some(' ');
+                    continue;
                 }
             }
+            prev_char = Some(')');
             continue;
         }
 
         result.push(c);
+        prev_char = Some(c);
     }
 
-    result
+    // Normalize control keywords: "if(" -> "if (", "for(" -> "for (", "while(" -> "while ("
+    let mut s = result;
+    if s.starts_with("if(") {
+        s = format!("if ({}", &s[3..]);
+    } else if s.starts_with("for(") {
+        s = format!("for ({}", &s[4..]);
+    } else if s.starts_with("while(") {
+        s = format!("while ({}", &s[6..]);
+    }
+    s
 }
 
 pub fn basic_glsl_format(text: &str, tab_size: usize, insert_spaces: bool) -> String {
@@ -1199,7 +1228,7 @@ fn main() -> io::Result<()> {
     let mut stdout_lock = stdout.lock();
 
     let mut default_target = TargetApi::OpenGl;
-    let mut default_engine = FormatterEngine::Builtin;
+    let mut default_engine = FormatterEngine::ClangFormat;
     let mut doc_cache: HashMap<String, String> = HashMap::new();
 
     loop {
