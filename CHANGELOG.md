@@ -21,12 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `struct`: Generic struct declaration template.
     - `func`: Generic function signature template.
     - `main`: Clean `void main() { ... }` entrypoint template.
-- **Hybrid Code Formatting (`textDocument/formatting`):**
-  - Advertised `"documentFormattingProvider": true` in `glsl_validator`.
-  - Seamless dual-engine formatting:
-    - **Primary Engine:** Uses `clang-format` if detected on `PATH`, `CLANG_FORMAT_PATH`, or Windows MSYS2 UCRT64.
-    - **Built-in Pure Rust Fallback:** Automatically activates when `clang-format` is not installed or fails. Handles brace indentation, preprocessor alignment (`#version`, `#include` at column 0), single-blank-line normalization, and whitespace cleanup with zero external dependencies.
-  - Honors client `tabSize` and `insertSpaces` formatting options.
+- **Hybrid Code Formatting & Range Formatting (`textDocument/formatting` & `textDocument/rangeFormatting`):**
+  - Advertised both `"documentFormattingProvider": true` and `"documentRangeFormattingProvider": true` in `glsl_validator`.
+  - Supports both full document formatting (`editor: format`) and selection/range formatting (`editor: format_selections` / `Ctrl + K, Ctrl + F`).
+  - **Built-in Pure Rust Engine (Default):** Zero dependencies! Formats immediately out of the box with brace indentation, `#version` / `#include` preprocessor column-0 alignment, comma spacing (`vec3(1.0, 2.0)`), and blank line normalization.
+  - **Clang-Format Engine:** Optional AST-level formatting using `clang-format`, configurable via `settings.json` or per-file `// @formatter: clang-format` directive.
+  - Reordered language servers in `config.toml` to prioritize `glsl_validator` over `glsl_analyzer` for formatting.
 - **Document Color Provider (`textDocument/documentColor` & `textDocument/colorPresentation`):**
   - Real-time inline color swatch previews for `vec3(...)` and `vec4(...)` color constructors in GLSL shaders.
   - Interactive color picker support via `textDocument/colorPresentation`, allowing users to adjust colors visually and write back formatted `vec3`/`vec4` literals.
@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `glsl_validator` automatically resolves the active shader file's directory and passes `-I<parent_dir>`, `-I<parent_dir>/include`, and `-I<parent_dir>/shaders` to `glslangValidator`.
   - Fixes missing `#include` resolution errors when editing modular shader projects with local header files.
 - **Expanded Unit Test Suite:**
-  - Added comprehensive tests for snippet generation, color token parsing, color extraction, URI path percent-decoding, and basic GLSL formatting (12 unit tests passing).
+  - Added comprehensive tests for snippet generation, color token parsing, color extraction, URI path percent-decoding, syntax cleaning, and FormatterEngine detection (14 unit tests passing).
 
 ---
 

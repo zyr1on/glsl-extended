@@ -216,6 +216,61 @@ out vec4 outColor; // Completely valid in OpenGL mode!
 
 ---
 
+#### 2. Code Formatting Configuration (Built-in vs. Clang-Format)
+
+`glsl_extended` provides dual-engine formatting with full support for both whole-document (`editor: format`) and range/selection formatting (`editor: format_selections` / `Ctrl + K, Ctrl + F`):
+
+- **Built-in Pure-Rust Engine (Default):** Zero external dependencies required! Formats instantly on any OS. Handles brace indentation, preprocessor alignment (`#version`, `#include` at column 0), comma spacing (`vec3(1.0, 2.0)`), and blank line normalization.
+- **Clang-Format Engine:** Uses system `clang-format` if available, with automatic fallback to the built-in formatter.
+
+##### Configuring Formatter in Zed `settings.json`:
+
+Add the following to your Zed `settings.json` (Command Palette → `zed: open settings`):
+
+```json
+{
+  "languages": {
+    "GLSL": {
+      "format_on_save": "on",
+      "formatter": {
+        "language_server": {
+          "name": "glsl_validator"
+        }
+      }
+    }
+  },
+  "lsp": {
+    "glsl_validator": {
+      "initialization_options": {
+        "target_api": "opengl",     // "opengl" (default) or "vulkan"
+        "formatter": "builtin"      // "builtin" (default) or "clang-format"
+      }
+    }
+  }
+}
+```
+
+##### Per-File Formatter Directive:
+You can switch the formatter per shader file using an inline directive in the first few lines:
+```glsl
+// @formatter: clang-format
+#version 460 core
+...
+```
+Or force the built-in formatter:
+```glsl
+// @formatter: builtin
+#version 460 core
+...
+```
+
+##### Supported Keybindings & Commands:
+- **Format Document:** Command Palette → `editor: format` (or `Shift + Alt + F`).
+- **Format Selection:** Select text → `editor: format_selections` (or `Ctrl + K, Ctrl + F`).
+- **Format on Save:** Automatically formats on `Ctrl + S` when `"format_on_save": "on"` is set.
+
+---
+
 ## Repository Structure
 
 ```

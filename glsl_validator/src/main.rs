@@ -165,6 +165,52 @@ pub fn detect_target_api(text: &str, default_target: TargetApi) -> TargetApi {
     default_target
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatterEngine {
+    Builtin,     // Default: pure-Rust GLSL formatter
+    ClangFormat, // clang-format with built-in fallback
+}
+
+impl FormatterEngine {
+    pub fn parse_engine(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("clang-format") || s.eq_ignore_ascii_case("clang") {
+            FormatterEngine::ClangFormat
+        } else {
+            FormatterEngine::Builtin
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            FormatterEngine::Builtin => "Builtin (Pure Rust)",
+            FormatterEngine::ClangFormat => "clang-format",
+        }
+    }
+}
+
+pub fn detect_formatter_engine(text: &str, default_engine: FormatterEngine) -> FormatterEngine {
+    for line in text.lines().take(10) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("#pragma") {
+            let lower = trimmed.to_lowercase();
+            if lower.contains("@formatter: clang-format")
+                || lower.contains("@formatter:clang-format")
+                || lower.contains("@formatter: clang")
+                || lower.contains("formatter(clang)")
+            {
+                return FormatterEngine::ClangFormat;
+            }
+            if lower.contains("@formatter: builtin")
+                || lower.contains("@formatter:builtin")
+                || lower.contains("formatter(builtin)")
+            {
+                return FormatterEngine::Builtin;
+            }
+        }
+    }
+    default_engine
+}
+
 pub fn percent_decode_str(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars();
@@ -751,6 +797,57 @@ fn analyze_line_braces(line: &str) -> (usize, usize) {
     (open, close)
 }
 
+pub fn clean_glsl_line_syntax(line: &str) -> String {
+    let mut result = String::with_capacity(line.len() + 8);
+    let mut chars = line.chars().peekable();
+    let mut in_str = false;
+
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            in_str = !in_str;
+            result.push(c);
+            continue;
+        }
+        if in_str {
+            result.push(c);
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            result.push('/');
+            for rest in chars.by_ref() {
+                result.push(rest);
+            }
+            break;
+        }
+
+        // Space after comma: e.g. "vec3(1.0,2.0)" -> "vec3(1.0, 2.0)"
+        if c == ',' {
+            result.push(',');
+            if let Some(&next) = chars.peek() {
+                if !next.is_whitespace() {
+                    result.push(' ');
+                }
+            }
+            continue;
+        }
+
+        // Space before opening brace: e.g. "){" -> ") {"
+        if c == ')' {
+            result.push(')');
+            if let Some(&next) = chars.peek() {
+                if next == '{' {
+                    result.push(' ');
+                }
+            }
+            continue;
+        }
+
+        result.push(c);
+    }
+
+    result
+}
+
 pub fn basic_glsl_format(text: &str, tab_size: usize, insert_spaces: bool) -> String {
     let indent_unit = if insert_spaces {
         " ".repeat(tab_size.max(1))
@@ -780,11 +877,12 @@ pub fn basic_glsl_format(text: &str, tab_size: usize, insert_spaces: bool) -> St
             continue;
         }
 
-        let (open_braces, close_braces) = analyze_line_braces(trimmed);
+        let cleaned = clean_glsl_line_syntax(trimmed);
+        let (open_braces, close_braces) = analyze_line_braces(&cleaned);
 
         // Count leading closing braces on the line (e.g. "}", "} else {")
         let mut leading_closes = 0;
-        for c in trimmed.chars() {
+        for c in cleaned.chars() {
             if c == '}' {
                 leading_closes += 1;
             } else if !c.is_whitespace() {
@@ -794,14 +892,14 @@ pub fn basic_glsl_format(text: &str, tab_size: usize, insert_spaces: bool) -> St
 
         let line_indent = if leading_closes > 0 {
             current_indent.saturating_sub(leading_closes)
-        } else if trimmed.starts_with("case ") || trimmed.starts_with("default:") {
+        } else if cleaned.starts_with("case ") || cleaned.starts_with("default:") {
             current_indent.saturating_sub(1)
         } else {
             current_indent
         };
 
         let indent_str = indent_unit.repeat(line_indent);
-        result_lines.push(format!("{}{}", indent_str, trimmed));
+        result_lines.push(format!("{}{}", indent_str, cleaned));
 
         current_indent = current_indent
             .saturating_sub(close_braces)
@@ -815,7 +913,13 @@ pub fn basic_glsl_format(text: &str, tab_size: usize, insert_spaces: bool) -> St
     res
 }
 
-pub fn format_document(uri: &str, text: &str, options: Option<&Value>) -> Option<Value> {
+pub fn format_document(
+    uri: &str,
+    text: &str,
+    options: Option<&Value>,
+    default_engine: FormatterEngine,
+) -> Option<Value> {
+    let engine = detect_formatter_engine(text, default_engine);
     let tab_size = options
         .and_then(|o| o.get("tabSize"))
         .and_then(|v| v.as_u64())
@@ -825,49 +929,46 @@ pub fn format_document(uri: &str, text: &str, options: Option<&Value>) -> Option
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let mut formatted = None;
-
-    // 1. Try clang-format first if available
-    if let Some(clang_format) = find_clang_format() {
-        let filename = if let Some(path) = uri_to_path(uri) {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("shader.glsl")
-                .to_string()
-        } else {
-            "shader.glsl".to_string()
-        };
-
-        log(&format!("Formatting doc '{uri}' using '{clang_format}' with assume-filename='{filename}'"));
-
-        if let Ok(mut child) = Command::new(&clang_format)
-            .args([format!("--assume-filename={filename}")])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-
-            if let Ok(output) = child.wait_with_output() {
-                if output.status.success() {
-                    if let Ok(s) = String::from_utf8(output.stdout) {
-                        formatted = Some(s);
-                    }
+    let formatted_text = match engine {
+        FormatterEngine::ClangFormat => {
+            let mut clang_out = None;
+            if let Some(clang_format) = find_clang_format() {
+                let filename = if let Some(path) = uri_to_path(uri) {
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("shader.glsl")
+                        .to_string()
                 } else {
-                    log(&format!("clang-format exited with status {:?}, falling back to built-in formatter", output.status.code()));
+                    "shader.glsl".to_string()
+                };
+
+                log(&format!("Formatting doc '{uri}' using clang-format='{clang_format}'"));
+                if let Ok(mut child) = Command::new(&clang_format)
+                    .args([format!("--assume-filename={filename}")])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = stdin.write_all(text.as_bytes());
+                    }
+                    if let Ok(output) = child.wait_with_output() {
+                        if output.status.success() {
+                            if let Ok(s) = String::from_utf8(output.stdout) {
+                                clang_out = Some(s);
+                            }
+                        }
+                    }
                 }
             }
+            clang_out.unwrap_or_else(|| {
+                log("clang-format not available or failed; using built-in formatter fallback.");
+                basic_glsl_format(text, tab_size, insert_spaces)
+            })
         }
-    }
-
-    // 2. Fallback to built-in basic GLSL formatter
-    let formatted_text = match formatted {
-        Some(f) => f,
-        None => {
-            log("Using built-in GLSL basic formatter fallback.");
+        FormatterEngine::Builtin => {
+            log(&format!("Formatting doc '{uri}' using built-in pure-Rust formatter"));
             basic_glsl_format(text, tab_size, insert_spaces)
         }
     };
@@ -890,6 +991,16 @@ pub fn format_document(uri: &str, text: &str, options: Option<&Value>) -> Option
             "newText": formatted_text
         }
     ]))
+}
+
+pub fn format_range(
+    uri: &str,
+    text: &str,
+    _range: Option<&Value>,
+    options: Option<&Value>,
+    default_engine: FormatterEngine,
+) -> Option<Value> {
+    format_document(uri, text, options, default_engine)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1088,6 +1199,7 @@ fn main() -> io::Result<()> {
     let mut stdout_lock = stdout.lock();
 
     let mut default_target = TargetApi::OpenGl;
+    let mut default_engine = FormatterEngine::Builtin;
     let mut doc_cache: HashMap<String, String> = HashMap::new();
 
     loop {
@@ -1141,6 +1253,10 @@ fn main() -> io::Result<()> {
                             default_target = TargetApi::parse_target(t);
                             log(&format!("Initialized with target_api={:?}", default_target));
                         }
+                        if let Some(f) = opts.get("formatter").and_then(|v| v.as_str()) {
+                            default_engine = FormatterEngine::parse_engine(f);
+                            log(&format!("Initialized with formatter engine={:?}", default_engine));
+                        }
                     }
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1152,6 +1268,7 @@ fn main() -> io::Result<()> {
                                     "triggerCharacters": ["."]
                                 },
                                 "documentFormattingProvider": true,
+                                "documentRangeFormattingProvider": true,
                                 "colorProvider": true
                             }
                         }
@@ -1172,7 +1289,22 @@ fn main() -> io::Result<()> {
                     let options = msg["params"].get("options");
                     let edits = doc_cache
                         .get(uri)
-                        .and_then(|text| format_document(uri, text, options))
+                        .and_then(|text| format_document(uri, text, options, default_engine))
+                        .unwrap_or(Value::Null);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": edits
+                    });
+                    send_lsp_message(&mut stdout_lock, &resp)?;
+                }
+                "textDocument/rangeFormatting" => {
+                    let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
+                    let options = msg["params"].get("options");
+                    let range = msg["params"].get("range");
+                    let edits = doc_cache
+                        .get(uri)
+                        .and_then(|text| format_range(uri, text, range, options, default_engine))
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1259,6 +1391,17 @@ fn main() -> io::Result<()> {
                                 send_lsp_message(&mut stdout_lock, &notif)?;
                             }
                         }
+                    }
+
+                    if let Some(f) = settings.get("formatter").and_then(|v| v.as_str()) {
+                        default_engine = FormatterEngine::parse_engine(f);
+                        log(&format!("Updated default_engine to {:?}", default_engine));
+                    } else if let Some(f) = settings.get("glsl_validator").and_then(|g| g.get("formatter")).and_then(|v| v.as_str()) {
+                        default_engine = FormatterEngine::parse_engine(f);
+                        log(&format!("Updated default_engine to {:?}", default_engine));
+                    } else if let Some(f) = settings.get("initialization_options").and_then(|g| g.get("formatter")).and_then(|v| v.as_str()) {
+                        default_engine = FormatterEngine::parse_engine(f);
+                        log(&format!("Updated default_engine to {:?}", default_engine));
                     }
                 }
             }
@@ -1506,5 +1649,29 @@ mod tests {
         assert!(formatted.contains("    } else {"));
         assert!(formatted.contains("        gl_Position = vec4(0.0);"));
         assert!(formatted.starts_with("#version 460 core"));
+    }
+
+    #[test]
+    fn test_clean_glsl_line_syntax() {
+        assert_eq!(clean_glsl_line_syntax("vec4(1.0,0.5,0.2,1.0)"), "vec4(1.0, 0.5, 0.2, 1.0)");
+        assert_eq!(clean_glsl_line_syntax("void main(){"), "void main() {");
+        assert_eq!(clean_glsl_line_syntax("// a,b"), "// a,b");
+    }
+
+    #[test]
+    fn test_formatter_engine_detection() {
+        assert_eq!(FormatterEngine::parse_engine("builtin"), FormatterEngine::Builtin);
+        assert_eq!(FormatterEngine::parse_engine("clang-format"), FormatterEngine::ClangFormat);
+        assert_eq!(FormatterEngine::parse_engine("clang"), FormatterEngine::ClangFormat);
+        assert_eq!(FormatterEngine::parse_engine("unknown"), FormatterEngine::Builtin);
+
+        assert_eq!(
+            detect_formatter_engine("// @formatter: clang-format\nvoid main() {}", FormatterEngine::Builtin),
+            FormatterEngine::ClangFormat
+        );
+        assert_eq!(
+            detect_formatter_engine("// @formatter: builtin\nvoid main() {}", FormatterEngine::ClangFormat),
+            FormatterEngine::Builtin
+        );
     }
 }
