@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.5] — 2026-09-14
+
+### Added
+- **Cross-Platform Binary Discovery Hierarchy:**
+  - Prioritizes system `PATH` lookup universally across Windows, Linux, and macOS without process-spawning overhead.
+  - Added support for explicit custom binary paths in `settings.json` (`clang_format_path` and `glslang_validator_path`).
+  - Added OS-specific fallback directories for official LLVM, Vulkan SDK, MSYS2, `/usr/bin`, and Homebrew.
+  - Informative one-time diagnostic log when `clang-format` is missing, showing package manager install commands (`winget`, `pacman`, `apt`, `dnf`, `brew`).
+- **Non-Blocking Background Worker Thread with Queue Draining:**
+  - Background thread validates shaders via `mpsc` channel, draining outdated rapid-keystroke requests (`rx.try_recv()`).
+  - Completely decouples validation from the main LSP event loop, ensuring zero autocomplete latency.
+- **Desktop OpenGL `#include` Preprocessor Pipeline:**
+  - Added automatic preprocessing pass (`-E -S <stage>`) resolving relative `#include` headers before validation.
+- **Universal `extension.wasm` Release Packaging:**
+  - Added automatic WebAssembly build and packaging to GitHub Actions release pipeline.
+- **Comprehensive Documentation:**
+  - Completely overhauled `README.md` with detailed tool installation guides, binary discovery hierarchy, and `settings.json` path configuration examples.
+  - 16/16 unit tests passing with zero Clippy warnings.
+
+---
+
 ## [0.1.4] — 2026-09-13
 
 ### Added
