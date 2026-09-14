@@ -102,25 +102,18 @@ To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux
 }
 ```
 
-### Configuration Options Breakdown
+### Configuration Options
 
-#### `languages.GLSL` Section
-- **`tab_size`** *(integer, default: `4`)*: Number of spaces for indentation (`2`, `4`, or `8`).
-- **`format_on_save`** *(string, default: `"off"`)*:
-  - `"off"`: Formatting only runs when manually triggered (`Shift + Alt + F` or Command Palette -> `editor: format`).
-  - `"on"`: Automatically formats the document every time the file is saved (`Ctrl + S`).
-- **`formatter`**:
-  - `{"language_server": {"name": "glsl_validator"}}`: Directs formatting requests to the GLSL validator language server.
+| Option | Values / Default | Description |
+|---|---|---|
+| `languages.GLSL.tab_size` | `4` *(or `2`, `8`)* | Indentation space width. |
+| `languages.GLSL.format_on_save` | `"off"` *(default)* / `"on"` | Format document automatically on save. |
+| `languages.GLSL.formatter` | `glsl_validator` | Routes formatting to `glsl_validator` language server. |
+| `target_api` | `"opengl"` *(default)* / `"vulkan"` | `"opengl"` (Desktop OpenGL, respects `#version` 330–460) or `"vulkan"` (strict SPIR-V). |
+| `formatter` | `"clang-format"` *(default)* / `"builtin"` | `"clang-format"` (AST-level, auto-fallback) or `"builtin"` (pure-Rust). |
+| `glslang_validator_path` | `""` *(optional)* | Custom path to `glslangValidator`. Leave empty for auto-discovery. |
+| `clang_format_path` | `""` *(optional)* | Custom path to `clang-format`. Leave empty for auto-discovery. |
 
-#### `lsp.glsl_validator.initialization_options` Section
-- **`target_api`** *(string, default: `"opengl"`)*:
-  - `"opengl"`: Validates against Desktop OpenGL rules. Automatically respects the `#version` directive in the shader (e.g. `#version 330 core`, `#version 460 core`, `#version 300 es`). Standard output declarations like `out vec3 Normal;` compile cleanly without requiring explicit layout locations.
-  - `"vulkan"`: Validates against Vulkan SPIR-V rules (`-V`). Requires explicit layout locations (`layout(location = 0)`), descriptor sets, and push constants.
-- **`formatter`** *(string, default: `"clang-format"`)*:
-  - `"clang-format"`: Uses external `clang-format` for AST-level indentation and line breaking. If `clang-format` is not found, it seamlessly falls back to `"builtin"`.
-  - `"builtin"`: Uses the built-in pure-Rust formatter with zero external dependencies.
-- **`glslang_validator_path`** *(string, optional)*: Absolute path to `glslangValidator` executable. Leave empty to automatically search system `PATH` and standard SDK locations.
-- **`clang_format_path`** *(string, optional)*: Absolute path to `clang-format` executable. Leave empty to automatically search system `PATH`.
 
 ---
 
