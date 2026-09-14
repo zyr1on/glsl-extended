@@ -1918,18 +1918,17 @@ fn main() -> io::Result<()> {
                 if newer.uri == req.uri {
                     req = newer;
                 } else {
-                    let cache = doc_cache_worker
-                        .lock()
-                        .map(|m| m.clone())
-                        .unwrap_or_default();
-                    let diagnostics = validate_shader(
-                        &req.uri,
-                        &req.text,
-                        req.target,
-                        req.glslang_path.as_deref(),
-                        &cache,
-                        req.configured_version.as_deref(),
-                    );
+                    let diagnostics = {
+                        let cache = doc_cache_worker.lock().unwrap_or_else(|e| e.into_inner());
+                        validate_shader(
+                            &req.uri,
+                            &req.text,
+                            req.target,
+                            req.glslang_path.as_deref(),
+                            &cache,
+                            req.configured_version.as_deref(),
+                        )
+                    };
                     let notif = json!({
                         "jsonrpc": "2.0",
                         "method": "textDocument/publishDiagnostics",
@@ -1945,18 +1944,17 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            let cache = doc_cache_worker
-                .lock()
-                .map(|m| m.clone())
-                .unwrap_or_default();
-            let diagnostics = validate_shader(
-                &req.uri,
-                &req.text,
-                req.target,
-                req.glslang_path.as_deref(),
-                &cache,
-                req.configured_version.as_deref(),
-            );
+            let diagnostics = {
+                let cache = doc_cache_worker.lock().unwrap_or_else(|e| e.into_inner());
+                validate_shader(
+                    &req.uri,
+                    &req.text,
+                    req.target,
+                    req.glslang_path.as_deref(),
+                    &cache,
+                    req.configured_version.as_deref(),
+                )
+            };
             let notif = json!({
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
@@ -2086,8 +2084,10 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/signatureHelp" => {
-                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
-                    let sig_help = signature::handle_signature_help(&msg, &cache_lock);
+                    let sig_help = {
+                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                        signature::handle_signature_help(&msg, &cache)
+                    };
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2096,8 +2096,10 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/hover" => {
-                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
-                    let hover_info = signature::handle_hover(&msg, &cache_lock);
+                    let hover_info = {
+                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                        signature::handle_hover(&msg, &cache)
+                    };
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2106,8 +2108,10 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/definition" => {
-                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
-                    let def_info = signature::handle_definition(&msg, &cache_lock);
+                    let def_info = {
+                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                        signature::handle_definition(&msg, &cache)
+                    };
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2116,8 +2120,10 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/completion" => {
-                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
-                    let items = handle_completion(&msg, &cache_lock);
+                    let items = {
+                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                        handle_completion(&msg, &cache)
+                    };
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2185,8 +2191,10 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/colorPresentation" => {
-                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
-                    let presentations = handle_color_presentation(&msg, &cache_lock);
+                    let presentations = {
+                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                        handle_color_presentation(&msg, &cache)
+                    };
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2352,15 +2360,16 @@ fn main() -> io::Result<()> {
                     }
 
                     if revalidate {
-                        let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
-                        for (uri, text) in &cache_lock {
-                            let _ = tx_val.send(ValidationRequest {
-                                uri: uri.clone(),
-                                text: text.clone(),
-                                target: default_target,
-                                glslang_path: custom_glslang_path.clone(),
-                                configured_version: custom_default_version.clone(),
-                            });
+                        if let Ok(cache) = doc_cache.lock() {
+                            for (uri, text) in cache.iter() {
+                                let _ = tx_val.send(ValidationRequest {
+                                    uri: uri.clone(),
+                                    text: text.clone(),
+                                    target: default_target,
+                                    glslang_path: custom_glslang_path.clone(),
+                                    configured_version: custom_default_version.clone(),
+                                });
+                            }
                         }
                     }
                 }
