@@ -12,10 +12,6 @@ languages = ["languages/glsl"]
 name = "GLSL Validator LSP"
 language = "GLSL"
 
-[language_servers.glsl_analyzer]
-name = "GLSL Analyzer LSP"
-language = "GLSL"
-
 [grammars.glsl]
 repository = "https://github.com/tree-sitter-grammars/tree-sitter-glsl"
 commit = "24a6c8ef698e4480fecf8340d771fbcb5de8fbb4"

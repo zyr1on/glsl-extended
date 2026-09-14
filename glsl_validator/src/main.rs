@@ -831,7 +831,16 @@ fn validate_shader(
 }
 
 pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
-    let segments: Vec<&str> = expr.split('.').filter(|s| !s.is_empty()).collect();
+    infer_vector_dimension_from_vars(&[], doc, expr)
+}
+
+pub fn infer_vector_dimension_from_vars(
+    vars: &[signature::VariableSymbol],
+    doc: &str,
+    expr: &str,
+) -> usize {
+    let clean = expr.trim();
+    let segments: Vec<&str> = clean.split('.').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return 4;
     }
@@ -840,6 +849,20 @@ pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
         Some(l) => *l,
         None => return 4,
     };
+
+    // 0. Check parsed variables from document and #include files
+    for var in vars {
+        if var.name == last {
+            let vt = var.var_type.to_lowercase();
+            if vt.contains("vec4") {
+                return 4;
+            } else if vt.contains("vec3") {
+                return 3;
+            } else if vt.contains("vec2") {
+                return 2;
+            }
+        }
+    }
 
     // 1. If `last` is already a swizzle (e.g. `pos.xyz.` or `a.xy.`)
     if last.len() >= 2 && last.chars().all(|c| "xyzwrgbastpq".contains(c)) {
@@ -1179,30 +1202,83 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     };
     let prefix = &line[..safe_col];
 
-    let trimmed = prefix.trim_end();
-    if let Some(stripped) = trimmed.strip_suffix('.') {
-        let before_dot = stripped.trim_end();
-        let mut start = before_dot.len();
-        for (i, c) in before_dot.char_indices().rev() {
-            if c.is_alphanumeric() || c == '_' || c == '.' {
-                start = i;
+    // Single-pass include scanning for functions and variables (ultra-fast)
+    let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+
+    // Detect if cursor is after a dot (e.g. `testColor.` or `testColor.x`)
+    let (is_dot_access, expr_before_dot, member_word, dot_col) = {
+        let trimmed = prefix.trim_end();
+        if let Some(stripped) = trimmed.strip_suffix('.') {
+            // Case 1: Cursor immediately after dot: `testColor.`
+            let before_dot = stripped.trim_end();
+            let mut start = before_dot.len();
+            for (i, c) in before_dot.char_indices().rev() {
+                if c.is_alphanumeric() || c == '_' || c == '.' {
+                    start = i;
+                } else {
+                    break;
+                }
+            }
+            let expr = &before_dot[start..];
+            (true, expr, "", stripped.len())
+        } else {
+            // Case 2: Cursor while typing swizzle: `testColor.x`
+            let mut word_start = prefix.len();
+            for (i, c) in prefix.char_indices().rev() {
+                if c.is_alphanumeric() || c == '_' {
+                    word_start = i;
+                } else {
+                    break;
+                }
+            }
+            let word = &prefix[word_start..];
+            let before_word = prefix[..word_start].trim_end();
+            if let Some(stripped) = before_word.strip_suffix('.') {
+                let before_dot = stripped.trim_end();
+                let mut start = before_dot.len();
+                for (i, c) in before_dot.char_indices().rev() {
+                    if c.is_alphanumeric() || c == '_' || c == '.' {
+                        start = i;
+                    } else {
+                        break;
+                    }
+                }
+                let expr = &before_dot[start..];
+                (true, expr, word, stripped.len())
             } else {
-                break;
+                (false, "", "", 0)
             }
         }
+    };
 
-        let expr = &before_dot[start..];
-        if expr.is_empty() {
-            return json!([]);
-        }
-
+    if is_dot_access && !expr_before_dot.is_empty() {
         log(&format!(
-            "Swizzle completion triggered for expr='{expr}' at line={line_idx}, col={col_idx}"
+            "Swizzle completion triggered for expr='{expr_before_dot}', member_filter='{member_word}' at line={line_idx}, col={col_idx}"
         ));
 
-        let dim = infer_vector_dimension(doc, expr);
-        let items = generate_swizzle_completions(dim);
-        return json!(items);
+        let dim = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot);
+        let mut swizzles = generate_swizzle_completions(dim);
+        if !member_word.is_empty() {
+            swizzles.retain(|s| {
+                s["label"]
+                    .as_str()
+                    .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
+            });
+        }
+        let swizzle_range = json!({
+            "start": { "line": line_idx, "character": dot_col + 1 },
+            "end": { "line": line_idx, "character": safe_col }
+        });
+        for item in &mut swizzles {
+            if let Some(obj) = item.as_object_mut() {
+                let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+                obj.insert("textEdit".to_string(), json!({
+                    "range": swizzle_range,
+                    "newText": label
+                }));
+            }
+        }
+        return json!(swizzles);
     }
 
     // Extract word under/before cursor
@@ -1240,7 +1316,6 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     });
 
     // 2. User variables & symbols from current file and recursively included files (#include)
-    let user_vars = signature::resolve_includes_and_scan_variables(uri, doc, doc_cache);
     for var in user_vars {
         if word.is_empty() || starts_with_ignore_ascii_case(&var.name, word) {
             if items.iter().any(|it| it["label"] == var.name) {
@@ -1281,7 +1356,6 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     }
 
     // 3. User functions from current file and recursively included files (#include)
-    let user_funcs = signature::resolve_includes_and_scan(uri, doc, doc_cache);
     for func in user_funcs {
         if word.is_empty() || starts_with_ignore_ascii_case(&func.name, word) {
             let detail = func.label.clone();
@@ -2602,6 +2676,18 @@ mod tests {
         assert_eq!(infer_vector_dimension(doc, "normal"), 3);
         assert_eq!(infer_vector_dimension(doc, "t.a.xyz"), 3);
         assert_eq!(infer_vector_dimension(doc, "gl_Position"), 4);
+
+        let test_vars = vec![signature::VariableSymbol {
+            name: "testColor".to_string(),
+            var_type: "vec4".to_string(),
+            qualifier: "".to_string(),
+            doc: None,
+            source: None,
+            line: 0,
+            col: 0,
+            file_uri: None,
+        }];
+        assert_eq!(infer_vector_dimension_from_vars(&test_vars, doc, "testColor"), 4);
     }
 
     #[test]

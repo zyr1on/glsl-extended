@@ -954,7 +954,18 @@ fn scan_included_file(
     // 1. If currently open in Zed editor buffer: parse live content (0 disk I/O)
     let clean_path = candidate.to_string_lossy().replace('\\', "/");
     let candidate_uri = format!("file:///{}", clean_path.trim_start_matches('/'));
-    if let Some(live_text) = ctx.doc_cache.get(&candidate_uri) {
+    let live_text = ctx.doc_cache.get(&candidate_uri).or_else(|| {
+        let c_norm = clean_path.trim_start_matches('/');
+        ctx.doc_cache.iter().find_map(|(u, t)| {
+            let u_norm = u.trim_start_matches("file:///").replace('\\', "/");
+            if u_norm.eq_ignore_ascii_case(c_norm) {
+                Some(t)
+            } else {
+                None
+            }
+        })
+    });
+    if let Some(live_text) = live_text {
         if let Some(ref mut funcs_out) = ctx.all_functions {
             let funcs = scan_user_functions(live_text, Some(source_label), Some(&candidate_uri));
             funcs_out.extend(funcs);
@@ -1056,6 +1067,29 @@ fn scan_includes_in_text(text: &str, base_dir: &Path, ctx: &mut IncludeScanConte
             scan_included_file(&candidate, source_label, ctx, depth);
         }
     }
+}
+
+/// Resolves #include directives and aggregates both function signatures and variables in a SINGLE pass.
+pub fn resolve_includes_and_scan_symbols(
+    uri: &str,
+    text: &str,
+    doc_cache: &HashMap<String, String>,
+) -> (Vec<FunctionSignature>, Vec<VariableSymbol>) {
+    let mut all_functions = scan_user_functions(text, None, Some(uri));
+    let mut all_variables = scan_user_variables(text, None, Some(uri));
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+
+    if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
+        let mut ctx = IncludeScanContext {
+            doc_cache,
+            all_functions: Some(&mut all_functions),
+            all_variables: Some(&mut all_variables),
+            visited: &mut visited,
+        };
+        scan_includes_in_text(text, &base_dir, &mut ctx, 1);
+    }
+
+    (all_functions, all_variables)
 }
 
 /// Resolves #include directives and aggregates function signatures with mtime caching.
