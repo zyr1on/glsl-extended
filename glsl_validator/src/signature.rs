@@ -29,6 +29,82 @@ pub struct FunctionSignature {
     pub source: Option<String>,
 }
 
+/// Determines if a given cursor position (line, col) is inside a comment or string literal.
+/// Zero-allocation, streaming single-pass character scan.
+pub fn is_in_comment_or_string(text: &str, target_line: usize, target_col: usize) -> bool {
+    let mut line_idx = 0;
+    let mut col_idx = 0;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if line_idx == target_line && col_idx >= target_col {
+            return in_line_comment || in_block_comment || in_string;
+        }
+
+        if c == '\n' {
+            in_line_comment = false;
+            line_idx += 1;
+            col_idx = 0;
+            if line_idx > target_line {
+                return false;
+            }
+            continue;
+        }
+
+        col_idx += 1;
+
+        if in_line_comment {
+            continue;
+        }
+
+        if in_block_comment {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                col_idx += 1;
+                in_block_comment = false;
+            }
+            continue;
+        }
+
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match c {
+            '"' => in_string = true,
+            '/' => {
+                if chars.peek() == Some(&'/') {
+                    chars.next();
+                    col_idx += 1;
+                    in_line_comment = true;
+                } else if chars.peek() == Some(&'*') {
+                    chars.next();
+                    col_idx += 1;
+                    in_block_comment = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if line_idx == target_line {
+        in_line_comment || in_block_comment || in_string
+    } else {
+        false
+    }
+}
+
 /// Identifies the function call surrounding the cursor and the active parameter index.
 /// CRLF-safe, zero-allocation byte scanning.
 pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Option<(String, usize)> {
@@ -460,6 +536,10 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
         None => return json!(null),
     };
 
+    if is_in_comment_or_string(doc, line_idx, col_idx) {
+        return json!(null);
+    }
+
     let (fn_name, active_param) = match find_enclosing_call(doc, line_idx, col_idx) {
         Some(call) => call,
         None => return json!(null),
@@ -560,6 +640,10 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         Some(d) => d,
         None => return json!(null),
     };
+
+    if is_in_comment_or_string(doc, line_idx, col_idx) {
+        return json!(null);
+    }
 
     let line = match doc.lines().nth(line_idx) {
         Some(l) => l,
@@ -776,5 +860,45 @@ void main() {}
         assert_eq!(funcs.len(), 2);
         let common_fn = funcs.iter().find(|f| f.name == "getFragPos").expect("getFragPos found");
         assert_eq!(common_fn.source, Some("common.glsl".to_string()));
+    }
+
+    #[test]
+    fn test_is_in_comment_or_string() {
+        let code = r#"vec3 a = vec3(1.0); // comment line
+/* block comment
+   second line */
+vec3 b = "string literal";
+"#;
+        // Line 0: code before '//'
+        assert!(!is_in_comment_or_string(code, 0, 10));
+        // Line 0: inside comment after '//'
+        assert!(is_in_comment_or_string(code, 0, 25));
+
+        // Line 1: inside block comment
+        assert!(is_in_comment_or_string(code, 1, 5));
+        // Line 2: inside block comment
+        assert!(is_in_comment_or_string(code, 2, 5));
+
+        // Line 3: code before quote
+        assert!(!is_in_comment_or_string(code, 3, 5));
+        // Line 3: inside string
+        assert!(is_in_comment_or_string(code, 3, 12));
+    }
+
+    #[test]
+    fn test_signature_help_in_comment() {
+        let mut doc_cache = HashMap::new();
+        let uri = "file:///shader.frag";
+        let code = "// normalize(vec3(1.0), ";
+        doc_cache.insert(uri.to_string(), code.to_string());
+
+        let req = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": 15 }
+            }
+        });
+        let res = handle_signature_help(&req, &doc_cache);
+        assert!(res.is_null());
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "zed-glsl-extended"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 description = "Zed GLSL Extended: glsl_analyzer LSP + glslangValidator diagnostics for OpenGL 4.6"

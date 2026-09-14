@@ -1,6 +1,18 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
+
+## [0.1.8] - 2026-09-14
+
+### Added
+- **Intelligent Comment & String Suppression:** Automatically suppresses autocompletion, signature help, and hover tooltips while typing inside single-line comments (`//`), multi-line comments (`/* ... */`), or string literals (`"..."`).
+- **Streamlined Documentation:** Refactored and condensed `README.md` for maximum clarity, removing redundant verbose listings while keeping complete quickstart and configuration guides.
+
+### Performance & Security
+- **Zero-Allocation Context Scanner:** Added a streaming single-pass cursor context detector (`is_in_comment_or_string`) with zero allocations and cross-platform CRLF/LF support.
+- **Defensive Boundary Guards:** Reinforced integer arithmetic and slice indexing against any potential overflow or off-by-one errors.
+
+---
 
 ## [0.1.7] - 2026-09-14
 

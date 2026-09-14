@@ -887,6 +887,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         None => return json!([]),
     };
 
+    if signature::is_in_comment_or_string(doc, line_idx, col_idx) {
+        return json!([]);
+    }
+
     let line = match doc.lines().nth(line_idx) {
         Some(l) => l,
         None => return json!([]),
@@ -2199,5 +2203,18 @@ vec3 calculateNormal(mat4 normal, vec3 aNormal) {
         let norm_items = norm_res.as_array().expect("norm items");
         let norm_item = norm_items.iter().find(|it| it["label"] == "normalize");
         assert!(norm_item.is_some(), "normalize must be found in completions");
+
+        // Comment test: typing inside comment should return empty list
+        let comment_code = "// norm";
+        doc_cache.insert(main_uri.to_string(), comment_code.to_string());
+        let comment_req = json!({
+            "params": {
+                "textDocument": { "uri": main_uri },
+                "position": { "line": 0, "character": 7 }
+            }
+        });
+        let comment_res = handle_completion(&comment_req, &doc_cache);
+        let comment_items = comment_res.as_array().expect("comment items");
+        assert!(comment_items.is_empty(), "Completions must be empty inside comments");
     }
 }
