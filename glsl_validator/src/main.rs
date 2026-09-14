@@ -2,7 +2,7 @@ pub mod docs;
 pub mod signature;
 
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -1159,7 +1159,7 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
                 "documentation": doc,
                 "insertText": body,
                 "insertTextFormat": 2, // Snippet
-                "sortText": format!("00_{}", prefix)
+                "sortText": format!("07_{}", prefix)
             })
         })
         .collect()
@@ -1292,13 +1292,6 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     }
     let word = &prefix[word_start..];
 
-    let mut items = Vec::new();
-
-    // 1. Snippets (if user is typing snippet prefix)
-    if !word.is_empty() {
-        items.extend(generate_snippet_completions(word));
-    }
-
     let mut word_end = safe_col;
     for (i, c) in line[safe_col..].char_indices() {
         if c.is_alphanumeric() || c == '_' {
@@ -1315,13 +1308,14 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         "end": { "line": line_idx, "character": word_end }
     });
 
-    // 2. User variables & symbols from current file and recursively included files (#include)
-    for var in user_vars {
-        if word.is_empty() || starts_with_ignore_ascii_case(&var.name, word) {
-            if items.iter().any(|it| it["label"] == var.name) {
-                continue;
-            }
+    let mut items = Vec::new();
+    let mut seen_labels = HashSet::new();
 
+    // 1. User variables & symbols from current file and recursively included files (#include)
+    for var in user_vars {
+        if (word.is_empty() || starts_with_ignore_ascii_case(&var.name, word))
+            && seen_labels.insert(var.name.clone())
+        {
             let kind = match var.qualifier.as_str() {
                 "struct" => 22,            // Struct
                 "const" | "#define" => 21, // Constant
@@ -1355,9 +1349,11 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         }
     }
 
-    // 3. User functions from current file and recursively included files (#include)
+    // 2. User functions from current file and recursively included files (#include)
     for func in user_funcs {
-        if word.is_empty() || starts_with_ignore_ascii_case(&func.name, word) {
+        if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
+            && seen_labels.insert(func.name.clone())
+        {
             let detail = func.label.clone();
             let doc_text = match (&func.source, &func.doc) {
                 (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
@@ -1365,10 +1361,6 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                 (None, Some(d)) => d.clone(),
                 (None, None) => String::new(),
             };
-
-            if items.iter().any(|it| it["label"] == func.name) {
-                continue;
-            }
 
             let (insert_text, insert_format) = if following_has_paren {
                 (func.name.clone(), 1)
@@ -1397,12 +1389,62 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         }
     }
 
-    // 3. Built-in functions from docs.gl
-    for builtin in docs::get_all_builtins() {
-        if word.is_empty() || starts_with_ignore_ascii_case(builtin.name, word) {
-            if items.iter().any(|it| it["label"] == builtin.name) {
-                continue;
+    // 3. GLSL Builtin Types & Constructors (e.g. vec2, vec3, vec4, mat4, float, sampler2D)
+    for b_type in docs::get_all_types() {
+        if word.is_empty() || starts_with_ignore_ascii_case(b_type.name, word) {
+            if seen_labels.insert(b_type.name.to_string()) {
+                items.push(json!({
+                    "label": b_type.name,
+                    "kind": 25, // TypeParameter / Class
+                    "detail": b_type.detail,
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": b_type.description,
+                    },
+                    "insertText": b_type.name,
+                    "insertTextFormat": 1,
+                    "textEdit": {
+                        "range": replace_range,
+                        "newText": b_type.name
+                    },
+                    "sortText": format!("02_{}", b_type.name),
+                }));
             }
+
+            if b_type.has_constructor {
+                let ctor_label = format!("{}(...)", b_type.name);
+                if seen_labels.insert(ctor_label.clone()) {
+                    let (insert_text, insert_format) = if following_has_paren {
+                        (b_type.name.to_string(), 1)
+                    } else {
+                        (format!("{}($1)$0", b_type.name), 2)
+                    };
+                    items.push(json!({
+                        "label": ctor_label,
+                        "kind": 4, // Constructor
+                        "detail": format!("{} constructor", b_type.name),
+                        "documentation": {
+                            "kind": "markdown",
+                            "value": b_type.description,
+                        },
+                        "insertText": insert_text,
+                        "insertTextFormat": insert_format,
+                        "textEdit": {
+                            "range": replace_range,
+                            "newText": insert_text
+                        },
+                        "sortText": format!("02_{}_ctor", b_type.name),
+                    }));
+                }
+            }
+        }
+    }
+
+    // 4. Built-in functions from docs.gl with parameter documentation
+    for builtin in docs::get_all_builtins() {
+        if (word.is_empty() || starts_with_ignore_ascii_case(builtin.name, word))
+            && seen_labels.insert(builtin.name.to_string())
+        {
             let first_overload = builtin.overloads.first().map(|o| o.label).unwrap_or("");
             let (insert_text, insert_format) = if following_has_paren {
                 (builtin.name.to_string(), 1)
@@ -1429,8 +1471,109 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                     "range": replace_range,
                     "newText": insert_text
                 },
-                "sortText": format!("01_{}", builtin.name),
+                "sortText": format!("03_{}", builtin.name),
             }));
+        }
+    }
+
+    // 5. GLSL Builtin Variables (e.g. gl_Position, gl_FragCoord, gl_VertexIndex)
+    for b_var in docs::get_all_variables() {
+        if (word.is_empty() || starts_with_ignore_ascii_case(b_var.name, word))
+            && seen_labels.insert(b_var.name.to_string())
+        {
+            items.push(json!({
+                "label": b_var.name,
+                "kind": 6, // Variable
+                "detail": format!("{} {}", b_var.stage, b_var.var_type),
+                "documentation": {
+                    "kind": "markdown",
+                    "value": b_var.description,
+                },
+                "insertText": b_var.name,
+                "insertTextFormat": 1,
+                "textEdit": {
+                    "range": replace_range,
+                    "newText": b_var.name
+                },
+                "sortText": format!("04_{}", b_var.name),
+            }));
+        }
+    }
+
+    // 6. GLSL Storage Qualifiers & Keywords (e.g. layout, binding, uniform, in, out, discard, return)
+    for kw in docs::get_all_keywords() {
+        if (word.is_empty() || starts_with_ignore_ascii_case(kw.name, word))
+            && seen_labels.insert(kw.name.to_string())
+        {
+            items.push(json!({
+                "label": kw.name,
+                "kind": 14, // Keyword
+                "detail": kw.detail,
+                "documentation": {
+                    "kind": "markdown",
+                    "value": kw.description,
+                },
+                "insertText": kw.name,
+                "insertTextFormat": 1,
+                "textEdit": {
+                    "range": replace_range,
+                    "newText": kw.name
+                },
+                "sortText": format!("05_{}", kw.name),
+            }));
+        }
+    }
+
+    // 7. GLSL Preprocessor Directives (e.g. #version, #include, #define)
+    let is_preprocessor = prefix.trim_start().starts_with('#') || word.starts_with('#');
+    for dir in docs::get_all_directives() {
+        let matches = if is_preprocessor {
+            let query = if word.starts_with('#') {
+                word
+            } else {
+                prefix.trim_start()
+            };
+            starts_with_ignore_ascii_case(dir.name, query)
+        } else {
+            let stripped_dir = dir.name.trim_start_matches('#');
+            !word.is_empty() && starts_with_ignore_ascii_case(stripped_dir, word)
+        };
+
+        if matches && seen_labels.insert(dir.name.to_string()) {
+            let insert_text = if prefix.trim_start().starts_with('#') && !word.starts_with('#') {
+                dir.name.trim_start_matches('#').to_string()
+            } else {
+                dir.name.to_string()
+            };
+
+            items.push(json!({
+                "label": dir.name,
+                "kind": 14, // Keyword
+                "detail": dir.detail,
+                "documentation": {
+                    "kind": "markdown",
+                    "value": dir.description,
+                },
+                "insertText": insert_text,
+                "insertTextFormat": 1,
+                "textEdit": {
+                    "range": replace_range,
+                    "newText": insert_text
+                },
+                "sortText": format!("06_{}", dir.name),
+            }));
+        }
+    }
+
+    // 8. Snippets
+    if !word.is_empty() {
+        let snippets = generate_snippet_completions(word);
+        for snip in snippets {
+            if let Some(lbl) = snip["label"].as_str() {
+                if seen_labels.insert(lbl.to_string()) {
+                    items.push(snip);
+                }
+            }
         }
     }
 
@@ -3135,5 +3278,89 @@ void main() {
         assert!(items.iter().any(|it| it["label"] == "view"));
         assert!(items.iter().any(|it| it["label"] == "transpose"));
         assert!(items.iter().any(|it| it["label"] == "inverse"));
+        assert!(items.iter().any(|it| it["label"] == "vec4"));
+        assert!(items.iter().any(|it| it["label"] == "vec4(...)"));
+        assert!(items.iter().any(|it| it["label"] == "layout"));
+        assert!(items.iter().any(|it| it["label"] == "uniform"));
+        assert!(items.iter().any(|it| it["label"] == "gl_Position"));
+    }
+
+    #[test]
+    fn test_completion_types_keywords_and_deduplication() {
+        let code = r#"#version 460 core
+layout(location = 0) in vec3 inPosition;
+uniform mat4 uModel;
+
+void main() {
+    vec4 testColor = vec4(1.0);
+    nor
+}
+"#;
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("file:///test.vert".to_string(), code.to_string());
+
+        // Test completion on 'nor'
+        let req_nor = json!({
+            "params": {
+                "textDocument": { "uri": "file:///test.vert" },
+                "position": { "line": 6, "character": 7 }
+            }
+        });
+        let res_nor = handle_completion(&req_nor, &doc_cache);
+        let items_nor = res_nor.as_array().expect("items array");
+
+        let norm_item = items_nor
+            .iter()
+            .find(|it| it["label"] == "normalize")
+            .expect("normalize must be suggested");
+        assert_eq!(
+            norm_item["insertText"].as_str().unwrap(),
+            "normalize($1)$0",
+            "normalize must include snippet parentheses"
+        );
+        assert_eq!(norm_item["insertTextFormat"].as_u64().unwrap(), 2);
+
+        // Test completion on empty line (line 7)
+        let req_all = json!({
+            "params": {
+                "textDocument": { "uri": "file:///test.vert" },
+                "position": { "line": 5, "character": 4 }
+            }
+        });
+        let res_all = handle_completion(&req_all, &doc_cache);
+        let items_all = res_all.as_array().expect("items array");
+
+        // Verify key types exist
+        assert!(items_all.iter().any(|it| it["label"] == "vec4"));
+        assert!(items_all.iter().any(|it| it["label"] == "vec4(...)"));
+        assert!(items_all.iter().any(|it| it["label"] == "mat4"));
+        assert!(items_all.iter().any(|it| it["label"] == "float"));
+        assert!(items_all.iter().any(|it| it["label"] == "sampler2D"));
+
+        // Verify key keywords exist
+        assert!(items_all.iter().any(|it| it["label"] == "layout"));
+        assert!(items_all.iter().any(|it| it["label"] == "uniform"));
+        assert!(items_all.iter().any(|it| it["label"] == "in"));
+        assert!(items_all.iter().any(|it| it["label"] == "out"));
+        assert!(items_all.iter().any(|it| it["label"] == "discard"));
+        assert!(items_all.iter().any(|it| it["label"] == "return"));
+
+        // Verify built-in variables exist
+        assert!(items_all.iter().any(|it| it["label"] == "gl_Position"));
+        assert!(items_all.iter().any(|it| it["label"] == "gl_FragCoord"));
+
+        // Verify local variables exist
+        assert!(items_all.iter().any(|it| it["label"] == "testColor"));
+
+        // Verify strictly ZERO DUPLICATE LABELS exist
+        let mut seen = HashSet::new();
+        for item in items_all {
+            let lbl = item["label"].as_str().unwrap();
+            assert!(
+                seen.insert(lbl),
+                "Duplicate completion label found: '{lbl}'"
+            );
+        }
     }
 }
+

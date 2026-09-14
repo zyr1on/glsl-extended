@@ -2,6 +2,24 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.19] - 2026-09-14
+
+### Added
+- **Complete Native GLSL Types Suite:** Autocomplete now natively suggests all GLSL 4.6 & Vulkan types:
+  - Scalar types: `float`, `double`, `int`, `uint`, `bool`, `void`.
+  - Floating, double, integer, unsigned, and boolean vectors: `vec2..vec4`, `dvec2..dvec4`, `ivec2..ivec4`, `uvec2..uvec4`, `bvec2..bvec4`.
+  - Matrices: `mat2..mat4`, all non-square matrix types (`mat2x3`, `mat4x3`, etc.), and double matrices (`dmat2..dmat4x4`).
+  - Samplers & Images: `sampler1D..samplerCube`, `sampler2DShadow`, `sampler2DArray`, `sampler2DMS`, `samplerBuffer`, integer/unsigned samplers (`isampler2D`, `usampler2D`), and image types (`image2D`, `iimage2D`, `uimage2D`).
+  - Vulkan specifics & atomics: `atomic_uint`, `subpassInput`, `subpassInputMS`.
+  - Type constructor snippets: `vec2(...)`, `vec3(...)`, `vec4(...)`, `mat4(...)` with Tab snippet placement.
+- **Complete GLSL Storage & Flow Keywords:** Autocomplete support for `layout`, `binding`, `location`, `set`, `push_constant`, `offset`, `std140`, `std430`, `uniform`, `buffer`, `in`, `out`, `inout`, `flat`, `smooth`, `noperspective`, `centroid`, `sample`, `patch`, `coherent`, `volatile`, `restrict`, `readonly`, `writeonly`, `precision`, `highp`, `mediump`, `lowp`, `invariant`, `precise`, `struct`, `subroutine`, `return`, `discard`, `break`, `continue`, `if`, `else`, `for`, `while`, `do`, `switch`, `case`, `default`.
+- **GLSL Builtin Variables:** Builtin variable suggestions across pipeline stages (`gl_Position`, `gl_PointSize`, `gl_FragCoord`, `gl_FragDepth`, `gl_VertexIndex`, `gl_InstanceIndex`, `gl_GlobalInvocationID`, etc.).
+- **Preprocessor Directives:** Suggestions for `#version`, `#include`, `#define`, `#undef`, `#if`, `#ifdef`, `#extension`, `#pragma`, etc.
+- **Strict Single-Pass Deduplication:** Guaranteed zero duplicate labels across any autocompletion query.
+- **glsl_analyzer Registered as Optional Server:** Re-registered `glsl_analyzer` in `extension.toml` as an available server option without default dual-launch conflict, giving users complete configuration choice.
+
+---
+
 ## [0.1.18] - 2026-09-14
 
 ### Added

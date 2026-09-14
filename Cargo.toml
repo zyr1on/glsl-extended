@@ -1,6 +1,6 @@
 [package]
 name = "zed-glsl-extended"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2024"
 authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 description = "Zed GLSL Extended: High-performance standalone GLSL Language Server for OpenGL 4.6"

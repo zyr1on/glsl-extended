@@ -853,3 +853,282 @@ pub fn lookup_builtin_function(name: &str) -> Option<&'static BuiltinFunction> {
 pub fn get_all_builtins() -> &'static [BuiltinFunction] {
     BUILTIN_FUNCTIONS
 }
+
+// ------------------------------------------------------------------------
+// GLSL Builtin Types
+// ------------------------------------------------------------------------
+
+pub struct BuiltinType {
+    pub name: &'static str,
+    pub detail: &'static str,
+    pub description: &'static str,
+    pub has_constructor: bool,
+}
+
+static BUILTIN_TYPES: &[BuiltinType] = &[
+    // Scalars
+    BuiltinType { name: "float", detail: "float", description: "### `float`\n*GLSL 4.6*\n\nIEEE 754 32-bit single-precision floating-point scalar type.", has_constructor: true },
+    BuiltinType { name: "double", detail: "double", description: "### `double`\n*GLSL 4.6*\n\nIEEE 754 64-bit double-precision floating-point scalar type.", has_constructor: true },
+    BuiltinType { name: "int", detail: "int", description: "### `int`\n*GLSL 4.6*\n\nSigned 32-bit two's complement integer scalar type.", has_constructor: true },
+    BuiltinType { name: "uint", detail: "uint", description: "### `uint`\n*GLSL 4.6*\n\nUnsigned 32-bit integer scalar type.", has_constructor: true },
+    BuiltinType { name: "bool", detail: "bool", description: "### `bool`\n*GLSL 4.6*\n\nBoolean scalar type (`true` or `false`).", has_constructor: true },
+    BuiltinType { name: "void", detail: "void", description: "### `void`\n*GLSL 4.6*\n\nIndicates that a function does not return a value.", has_constructor: false },
+
+    // Floating-Point Vectors
+    BuiltinType { name: "vec2", detail: "vec2", description: "### `vec2`\n*GLSL 4.6*\n\n2-component 32-bit floating-point vector `(x, y)`.", has_constructor: true },
+    BuiltinType { name: "vec3", detail: "vec3", description: "### `vec3`\n*GLSL 4.6*\n\n3-component 32-bit floating-point vector `(x, y, z)`.", has_constructor: true },
+    BuiltinType { name: "vec4", detail: "vec4", description: "### `vec4`\n*GLSL 4.6*\n\n4-component 32-bit floating-point vector `(x, y, z, w)`.", has_constructor: true },
+
+    // Double-Precision Vectors
+    BuiltinType { name: "dvec2", detail: "dvec2", description: "### `dvec2`\n*GLSL 4.6*\n\n2-component 64-bit double-precision floating-point vector.", has_constructor: true },
+    BuiltinType { name: "dvec3", detail: "dvec3", description: "### `dvec3`\n*GLSL 4.6*\n\n3-component 64-bit double-precision floating-point vector.", has_constructor: true },
+    BuiltinType { name: "dvec4", detail: "dvec4", description: "### `dvec4`\n*GLSL 4.6*\n\n4-component 64-bit double-precision floating-point vector.", has_constructor: true },
+
+    // Integer Vectors
+    BuiltinType { name: "ivec2", detail: "ivec2", description: "### `ivec2`\n*GLSL 4.6*\n\n2-component 32-bit signed integer vector.", has_constructor: true },
+    BuiltinType { name: "ivec3", detail: "ivec3", description: "### `ivec3`\n*GLSL 4.6*\n\n3-component 32-bit signed integer vector.", has_constructor: true },
+    BuiltinType { name: "ivec4", detail: "ivec4", description: "### `ivec4`\n*GLSL 4.6*\n\n4-component 32-bit signed integer vector.", has_constructor: true },
+
+    // Unsigned Integer Vectors
+    BuiltinType { name: "uvec2", detail: "uvec2", description: "### `uvec2`\n*GLSL 4.6*\n\n2-component 32-bit unsigned integer vector.", has_constructor: true },
+    BuiltinType { name: "uvec3", detail: "uvec3", description: "### `uvec3`\n*GLSL 4.6*\n\n3-component 32-bit unsigned integer vector.", has_constructor: true },
+    BuiltinType { name: "uvec4", detail: "uvec4", description: "### `uvec4`\n*GLSL 4.6*\n\n4-component 32-bit unsigned integer vector.", has_constructor: true },
+
+    // Boolean Vectors
+    BuiltinType { name: "bvec2", detail: "bvec2", description: "### `bvec2`\n*GLSL 4.6*\n\n2-component boolean vector.", has_constructor: true },
+    BuiltinType { name: "bvec3", detail: "bvec3", description: "### `bvec3`\n*GLSL 4.6*\n\n3-component boolean vector.", has_constructor: true },
+    BuiltinType { name: "bvec4", detail: "bvec4", description: "### `bvec4`\n*GLSL 4.6*\n\n4-component boolean vector.", has_constructor: true },
+
+    // Square Matrices
+    BuiltinType { name: "mat2", detail: "mat2", description: "### `mat2`\n*GLSL 4.6*\n\n2x2 single-precision floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat3", detail: "mat3", description: "### `mat3`\n*GLSL 4.6*\n\n3x3 single-precision floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat4", detail: "mat4", description: "### `mat4`\n*GLSL 4.6*\n\n4x4 single-precision floating-point matrix.", has_constructor: true },
+
+    // Non-Square Matrices
+    BuiltinType { name: "mat2x2", detail: "mat2x2", description: "### `mat2x2`\n*GLSL 4.6*\n\n2 columns x 2 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat2x3", detail: "mat2x3", description: "### `mat2x3`\n*GLSL 4.6*\n\n2 columns x 3 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat2x4", detail: "mat2x4", description: "### `mat2x4`\n*GLSL 4.6*\n\n2 columns x 4 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat3x2", detail: "mat3x2", description: "### `mat3x2`\n*GLSL 4.6*\n\n3 columns x 2 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat3x3", detail: "mat3x3", description: "### `mat3x3`\n*GLSL 4.6*\n\n3 columns x 3 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat3x4", detail: "mat3x4", description: "### `mat3x4`\n*GLSL 4.6*\n\n3 columns x 4 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat4x2", detail: "mat4x2", description: "### `mat4x2`\n*GLSL 4.6*\n\n4 columns x 2 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat4x3", detail: "mat4x3", description: "### `mat4x3`\n*GLSL 4.6*\n\n4 columns x 3 rows floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "mat4x4", detail: "mat4x4", description: "### `mat4x4`\n*GLSL 4.6*\n\n4 columns x 4 rows floating-point matrix.", has_constructor: true },
+
+    // Double Matrices
+    BuiltinType { name: "dmat2", detail: "dmat2", description: "### `dmat2`\n*GLSL 4.6*\n\n2x2 double-precision floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "dmat3", detail: "dmat3", description: "### `dmat3`\n*GLSL 4.6*\n\n3x3 double-precision floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "dmat4", detail: "dmat4", description: "### `dmat4`\n*GLSL 4.6*\n\n4x4 double-precision floating-point matrix.", has_constructor: true },
+    BuiltinType { name: "dmat2x2", detail: "dmat2x2", description: "### `dmat2x2`\n*GLSL 4.6*\n\n2 columns x 2 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat2x3", detail: "dmat2x3", description: "### `dmat2x3`\n*GLSL 4.6*\n\n2 columns x 3 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat2x4", detail: "dmat2x4", description: "### `dmat2x4`\n*GLSL 4.6*\n\n2 columns x 4 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat3x2", detail: "dmat3x2", description: "### `dmat3x2`\n*GLSL 4.6*\n\n3 columns x 2 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat3x3", detail: "dmat3x3", description: "### `dmat3x3`\n*GLSL 4.6*\n\n3 columns x 3 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat3x4", detail: "dmat3x4", description: "### `dmat3x4`\n*GLSL 4.6*\n\n3 columns x 4 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat4x2", detail: "dmat4x2", description: "### `dmat4x2`\n*GLSL 4.6*\n\n4 columns x 2 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat4x3", detail: "dmat4x3", description: "### `dmat4x3`\n*GLSL 4.6*\n\n4 columns x 3 rows double-precision matrix.", has_constructor: true },
+    BuiltinType { name: "dmat4x4", detail: "dmat4x4", description: "### `dmat4x4`\n*GLSL 4.6*\n\n4 columns x 4 rows double-precision matrix.", has_constructor: true },
+
+    // Floating-Point Samplers
+    BuiltinType { name: "sampler1D", detail: "sampler1D", description: "### `sampler1D`\n*GLSL 4.6*\n\nHandle for 1D texture sampling.", has_constructor: false },
+    BuiltinType { name: "sampler2D", detail: "sampler2D", description: "### `sampler2D`\n*GLSL 4.6*\n\nHandle for 2D texture sampling.", has_constructor: false },
+    BuiltinType { name: "sampler3D", detail: "sampler3D", description: "### `sampler3D`\n*GLSL 4.6*\n\nHandle for 3D texture sampling.", has_constructor: false },
+    BuiltinType { name: "samplerCube", detail: "samplerCube", description: "### `samplerCube`\n*GLSL 4.6*\n\nHandle for cubemap texture sampling.", has_constructor: false },
+    BuiltinType { name: "sampler2DShadow", detail: "sampler2DShadow", description: "### `sampler2DShadow`\n*GLSL 4.6*\n\nHandle for 2D depth texture sampling with comparison.", has_constructor: false },
+    BuiltinType { name: "samplerCubeShadow", detail: "samplerCubeShadow", description: "### `samplerCubeShadow`\n*GLSL 4.6*\n\nHandle for cubemap depth texture sampling with comparison.", has_constructor: false },
+    BuiltinType { name: "sampler2DArray", detail: "sampler2DArray", description: "### `sampler2DArray`\n*GLSL 4.6*\n\nHandle for 2D array texture sampling.", has_constructor: false },
+    BuiltinType { name: "sampler2DArrayShadow", detail: "sampler2DArrayShadow", description: "### `sampler2DArrayShadow`\n*GLSL 4.6*\n\nHandle for 2D array depth texture sampling with comparison.", has_constructor: false },
+    BuiltinType { name: "sampler1DArray", detail: "sampler1DArray", description: "### `sampler1DArray`\n*GLSL 4.6*\n\nHandle for 1D array texture sampling.", has_constructor: false },
+    BuiltinType { name: "sampler1DArrayShadow", detail: "sampler1DArrayShadow", description: "### `sampler1DArrayShadow`\n*GLSL 4.6*\n\nHandle for 1D array depth texture sampling with comparison.", has_constructor: false },
+    BuiltinType { name: "sampler2DMS", detail: "sampler2DMS", description: "### `sampler2DMS`\n*GLSL 4.6*\n\nHandle for multisample 2D texture fetching.", has_constructor: false },
+    BuiltinType { name: "sampler2DMSArray", detail: "sampler2DMSArray", description: "### `sampler2DMSArray`\n*GLSL 4.6*\n\nHandle for multisample 2D array texture fetching.", has_constructor: false },
+    BuiltinType { name: "samplerBuffer", detail: "samplerBuffer", description: "### `samplerBuffer`\n*GLSL 4.6*\n\nHandle for buffer texture fetching.", has_constructor: false },
+    BuiltinType { name: "sampler2DRect", detail: "sampler2DRect", description: "### `sampler2DRect`\n*GLSL 4.6*\n\nHandle for rectangular (unnormalized) 2D texture sampling.", has_constructor: false },
+    BuiltinType { name: "sampler2DRectShadow", detail: "sampler2DRectShadow", description: "### `sampler2DRectShadow`\n*GLSL 4.6*\n\nHandle for rectangular 2D depth texture sampling with comparison.", has_constructor: false },
+
+    // Integer Samplers
+    BuiltinType { name: "isampler1D", detail: "isampler1D", description: "### `isampler1D`\n*GLSL 4.6*\n\nHandle for integer 1D texture sampling.", has_constructor: false },
+    BuiltinType { name: "isampler2D", detail: "isampler2D", description: "### `isampler2D`\n*GLSL 4.6*\n\nHandle for integer 2D texture sampling.", has_constructor: false },
+    BuiltinType { name: "isampler3D", detail: "isampler3D", description: "### `isampler3D`\n*GLSL 4.6*\n\nHandle for integer 3D texture sampling.", has_constructor: false },
+    BuiltinType { name: "isamplerCube", detail: "isamplerCube", description: "### `isamplerCube`\n*GLSL 4.6*\n\nHandle for integer cubemap texture sampling.", has_constructor: false },
+    BuiltinType { name: "isampler2DArray", detail: "isampler2DArray", description: "### `isampler2DArray`\n*GLSL 4.6*\n\nHandle for integer 2D array texture sampling.", has_constructor: false },
+    BuiltinType { name: "isampler2DMS", detail: "isampler2DMS", description: "### `isampler2DMS`\n*GLSL 4.6*\n\nHandle for integer multisample 2D texture fetching.", has_constructor: false },
+    BuiltinType { name: "isampler2DMSArray", detail: "isampler2DMSArray", description: "### `isampler2DMSArray`\n*GLSL 4.6*\n\nHandle for integer multisample 2D array texture fetching.", has_constructor: false },
+    BuiltinType { name: "isamplerBuffer", detail: "isamplerBuffer", description: "### `isamplerBuffer`\n*GLSL 4.6*\n\nHandle for integer buffer texture fetching.", has_constructor: false },
+    BuiltinType { name: "isampler2DRect", detail: "isampler2DRect", description: "### `isampler2DRect`\n*GLSL 4.6*\n\nHandle for integer rectangular 2D texture sampling.", has_constructor: false },
+
+    // Unsigned Integer Samplers
+    BuiltinType { name: "usampler1D", detail: "usampler1D", description: "### `usampler1D`\n*GLSL 4.6*\n\nHandle for unsigned integer 1D texture sampling.", has_constructor: false },
+    BuiltinType { name: "usampler2D", detail: "usampler2D", description: "### `usampler2D`\n*GLSL 4.6*\n\nHandle for unsigned integer 2D texture sampling.", has_constructor: false },
+    BuiltinType { name: "usampler3D", detail: "usampler3D", description: "### `usampler3D`\n*GLSL 4.6*\n\nHandle for unsigned integer 3D texture sampling.", has_constructor: false },
+    BuiltinType { name: "usamplerCube", detail: "usamplerCube", description: "### `usamplerCube`\n*GLSL 4.6*\n\nHandle for unsigned integer cubemap texture sampling.", has_constructor: false },
+    BuiltinType { name: "usampler2DArray", detail: "usampler2DArray", description: "### `usampler2DArray`\n*GLSL 4.6*\n\nHandle for unsigned integer 2D array texture sampling.", has_constructor: false },
+    BuiltinType { name: "usampler2DMS", detail: "usampler2DMS", description: "### `usampler2DMS`\n*GLSL 4.6*\n\nHandle for unsigned integer multisample 2D texture fetching.", has_constructor: false },
+    BuiltinType { name: "usampler2DMSArray", detail: "usampler2DMSArray", description: "### `usampler2DMSArray`\n*GLSL 4.6*\n\nHandle for unsigned integer multisample 2D array texture fetching.", has_constructor: false },
+    BuiltinType { name: "usamplerBuffer", detail: "usamplerBuffer", description: "### `usamplerBuffer`\n*GLSL 4.6*\n\nHandle for unsigned integer buffer texture fetching.", has_constructor: false },
+    BuiltinType { name: "usampler2DRect", detail: "usampler2DRect", description: "### `usampler2DRect`\n*GLSL 4.6*\n\nHandle for unsigned integer rectangular 2D texture sampling.", has_constructor: false },
+
+    // Images
+    BuiltinType { name: "image1D", detail: "image1D", description: "### `image1D`\n*GLSL 4.6*\n\nHandle for 1D image load, store, and atomic operations.", has_constructor: false },
+    BuiltinType { name: "image2D", detail: "image2D", description: "### `image2D`\n*GLSL 4.6*\n\nHandle for 2D image load, store, and atomic operations.", has_constructor: false },
+    BuiltinType { name: "image3D", detail: "image3D", description: "### `image3D`\n*GLSL 4.6*\n\nHandle for 3D image load, store, and atomic operations.", has_constructor: false },
+    BuiltinType { name: "imageCube", detail: "imageCube", description: "### `imageCube`\n*GLSL 4.6*\n\nHandle for cubemap image load, store, and atomic operations.", has_constructor: false },
+    BuiltinType { name: "image2DArray", detail: "image2DArray", description: "### `image2DArray`\n*GLSL 4.6*\n\nHandle for 2D array image load, store, and atomic operations.", has_constructor: false },
+    BuiltinType { name: "imageBuffer", detail: "imageBuffer", description: "### `imageBuffer`\n*GLSL 4.6*\n\nHandle for buffer image load, store, and atomic operations.", has_constructor: false },
+    BuiltinType { name: "image2DRect", detail: "image2DRect", description: "### `image2DRect`\n*GLSL 4.6*\n\nHandle for rectangular 2D image load, store, and atomic operations.", has_constructor: false },
+
+    // Atomics & Vulkan Subpass
+    BuiltinType { name: "atomic_uint", detail: "atomic_uint", description: "### `atomic_uint`\n*GLSL 4.6*\n\nUnsigned atomic counter type.", has_constructor: false },
+    BuiltinType { name: "subpassInput", detail: "subpassInput", description: "### `subpassInput`\n*Vulkan GLSL*\n\nHandle for Vulkan subpass input attachment.", has_constructor: false },
+    BuiltinType { name: "subpassInputMS", detail: "subpassInputMS", description: "### `subpassInputMS`\n*Vulkan GLSL*\n\nHandle for Vulkan multisampled subpass input attachment.", has_constructor: false },
+];
+
+pub fn get_all_types() -> &'static [BuiltinType] {
+    BUILTIN_TYPES
+}
+
+// ------------------------------------------------------------------------
+// GLSL Builtin Keywords & Qualifiers
+// ------------------------------------------------------------------------
+
+pub struct BuiltinKeyword {
+    pub name: &'static str,
+    pub detail: &'static str,
+    pub description: &'static str,
+}
+
+static BUILTIN_KEYWORDS: &[BuiltinKeyword] = &[
+    // Qualifiers & Storage
+    BuiltinKeyword { name: "layout", detail: "layout(...)", description: "### `layout`\n*GLSL 4.6*\n\nSpecifies layout qualifiers for variables, interfaces, bindings, or buffer blocks (e.g. `layout(location = 0)` or `layout(binding = 0)`)." },
+    BuiltinKeyword { name: "binding", detail: "layout(binding = ...)", description: "### `binding`\n*GLSL 4.6*\n\nLayout qualifier specifying the binding point index of a uniform block, buffer block, or texture sampler." },
+    BuiltinKeyword { name: "location", detail: "layout(location = ...)", description: "### `location`\n*GLSL 4.6*\n\nLayout qualifier specifying the input or output location index for vertex or fragment stage interface variables." },
+    BuiltinKeyword { name: "set", detail: "layout(set = ...)", description: "### `set`\n*Vulkan GLSL*\n\nLayout qualifier specifying the descriptor set index for a resource (e.g. `layout(set = 0, binding = 0)`)." },
+    BuiltinKeyword { name: "push_constant", detail: "layout(push_constant)", description: "### `push_constant`\n*Vulkan GLSL*\n\nLayout qualifier declaring a uniform block backed by Vulkan push constants." },
+    BuiltinKeyword { name: "offset", detail: "layout(offset = ...)", description: "### `offset`\n*GLSL 4.6*\n\nLayout qualifier specifying member byte offset within a uniform or storage buffer block." },
+    BuiltinKeyword { name: "std140", detail: "layout(std140)", description: "### `std140`\n*GLSL 4.6*\n\nStandard packing layout rule for uniform blocks (OpenGL Standard 140)." },
+    BuiltinKeyword { name: "std430", detail: "layout(std430)", description: "### `std430`\n*GLSL 4.6*\n\nStandard packing layout rule for shader storage buffer objects (SSBO), with tighter packing for arrays and matrices." },
+    BuiltinKeyword { name: "uniform", detail: "uniform <type> <name>", description: "### `uniform`\n*GLSL 4.6*\n\nDeclares a read-only variable whose value is supplied by the application and constant across all shader invocations within a draw call." },
+    BuiltinKeyword { name: "buffer", detail: "buffer <block_name> { ... }", description: "### `buffer`\n*GLSL 4.6*\n\nDeclares a Shader Storage Buffer Object (SSBO) with read/write capability." },
+    BuiltinKeyword { name: "in", detail: "in <type> <name>", description: "### `in`\n*GLSL 4.6*\n\nDeclares an input variable passed from the previous pipeline stage or vertex attributes." },
+    BuiltinKeyword { name: "out", detail: "out <type> <name>", description: "### `out`\n*GLSL 4.6*\n\nDeclares an output variable passed to the next pipeline stage or framebuffer." },
+    BuiltinKeyword { name: "inout", detail: "inout <type> <param>", description: "### `inout`\n*GLSL 4.6*\n\nFunction parameter qualifier indicating that the parameter is passed by reference (read and written)." },
+    BuiltinKeyword { name: "const", detail: "const <type> <name>", description: "### `const`\n*GLSL 4.6*\n\nDeclares a compile-time constant or read-only variable." },
+    BuiltinKeyword { name: "flat", detail: "flat in/out", description: "### `flat`\n*GLSL 4.6*\n\nInterpolation qualifier: no interpolation across the primitive; value from the provoking vertex is used." },
+    BuiltinKeyword { name: "smooth", detail: "smooth in/out", description: "### `smooth`\n*GLSL 4.6*\n\nInterpolation qualifier: perspective-correct interpolation across primitives (default)." },
+    BuiltinKeyword { name: "noperspective", detail: "noperspective in/out", description: "### `noperspective`\n*GLSL 4.6*\n\nInterpolation qualifier: linear interpolation in screen space without perspective correction." },
+    BuiltinKeyword { name: "centroid", detail: "centroid in/out", description: "### `centroid`\n*GLSL 4.6*\n\nInterpolation qualifier: evaluates the variable at a point within the primitive's covered area during multisampling." },
+    BuiltinKeyword { name: "sample", detail: "sample in/out", description: "### `sample`\n*GLSL 4.6*\n\nInterpolation qualifier: causes per-sample interpolation and evaluation during multisampling." },
+    BuiltinKeyword { name: "patch", detail: "patch in/out", description: "### `patch`\n*GLSL 4.6*\n\nTessellation stage interface qualifier for per-patch attributes." },
+    BuiltinKeyword { name: "coherent", detail: "coherent", description: "### `coherent`\n*GLSL 4.6*\n\nMemory qualifier ensuring reads and writes to buffer or image variables are visible across shader invocations." },
+    BuiltinKeyword { name: "volatile", detail: "volatile", description: "### `volatile`\n*GLSL 4.6*\n\nMemory qualifier indicating that variable values may change asynchronously in memory." },
+    BuiltinKeyword { name: "restrict", detail: "restrict", description: "### `restrict`\n*GLSL 4.6*\n\nMemory qualifier hinting that the underlying memory is accessed solely through this variable." },
+    BuiltinKeyword { name: "readonly", detail: "readonly", description: "### `readonly`\n*GLSL 4.6*\n\nMemory qualifier specifying that a buffer or image variable can only be read." },
+    BuiltinKeyword { name: "writeonly", detail: "writeonly", description: "### `writeonly`\n*GLSL 4.6*\n\nMemory qualifier specifying that a buffer or image variable can only be written." },
+    BuiltinKeyword { name: "precision", detail: "precision <qualifier> <type>", description: "### `precision`\n*GLSL 4.6*\n\nSets default precision for float or integer types (`highp`, `mediump`, `lowp`)." },
+    BuiltinKeyword { name: "highp", detail: "highp", description: "### `highp`\n*GLSL 4.6*\n\nHigh-precision qualifier (at least 32-bit floating point)." },
+    BuiltinKeyword { name: "mediump", detail: "mediump", description: "### `mediump`\n*GLSL 4.6*\n\nMedium-precision qualifier (typically 16-bit floating point)." },
+    BuiltinKeyword { name: "lowp", detail: "lowp", description: "### `lowp`\n*GLSL 4.6*\n\nLow-precision qualifier (typically 8-bit to 10-bit fixed point)." },
+    BuiltinKeyword { name: "invariant", detail: "invariant <name>", description: "### `invariant`\n*GLSL 4.6*\n\nGuarantees that an output variable's value is calculated identically across different shaders." },
+    BuiltinKeyword { name: "precise", detail: "precise <name>", description: "### `precise`\n*GLSL 4.6*\n\nPrevents compiler optimizations that could change arithmetic evaluation order or precision." },
+    BuiltinKeyword { name: "struct", detail: "struct <name> { ... }", description: "### `struct`\n*GLSL 4.6*\n\nDefines a user-defined composite data structure." },
+    BuiltinKeyword { name: "subroutine", detail: "subroutine", description: "### `subroutine`\n*GLSL 4.6*\n\nDeclares dynamic shader subroutine function types and uniform selectors." },
+
+    // Control Flow
+    BuiltinKeyword { name: "return", detail: "return [value];", description: "### `return`\n*GLSL 4.6*\n\nReturns control and an optional result value from the current function." },
+    BuiltinKeyword { name: "discard", detail: "discard;", description: "### `discard`\n*GLSL 4.6*\n\nTerminates execution of the current fragment shader invocation and discards the fragment so it is not written to the framebuffer." },
+    BuiltinKeyword { name: "break", detail: "break;", description: "### `break`\n*GLSL 4.6*\n\nTerminates execution of the innermost loop (`for`, `while`, `do`) or `switch` statement." },
+    BuiltinKeyword { name: "continue", detail: "continue;", description: "### `continue`\n*GLSL 4.6*\n\nSkips the remainder of the current loop iteration and proceeds to the next iteration." },
+    BuiltinKeyword { name: "if", detail: "if (condition) { ... }", description: "### `if`\n*GLSL 4.6*\n\nExecutes a code block if the specified boolean condition evaluates to true." },
+    BuiltinKeyword { name: "else", detail: "else { ... }", description: "### `else`\n*GLSL 4.6*\n\nExecutes a code block if the preceding `if` condition evaluated to false." },
+    BuiltinKeyword { name: "for", detail: "for (init; cond; step) { ... }", description: "### `for`\n*GLSL 4.6*\n\nExecutes a code block repeatedly while the condition evaluates to true." },
+    BuiltinKeyword { name: "while", detail: "while (condition) { ... }", description: "### `while`\n*GLSL 4.6*\n\nExecutes a code block repeatedly as long as the condition evaluates to true." },
+    BuiltinKeyword { name: "do", detail: "do { ... } while (condition);", description: "### `do ... while`\n*GLSL 4.6*\n\nExecutes a code block at least once, then repeats as long as the condition is true." },
+    BuiltinKeyword { name: "switch", detail: "switch (expr) { ... }", description: "### `switch`\n*GLSL 4.6*\n\nEvaluates an integer expression and transfers control to matching `case` or `default` label." },
+    BuiltinKeyword { name: "case", detail: "case <constant>:", description: "### `case`\n*GLSL 4.6*\n\nDefines a branch target within a `switch` statement." },
+    BuiltinKeyword { name: "default", detail: "default:", description: "### `default`\n*GLSL 4.6*\n\nDefines the fallback branch target within a `switch` statement when no `case` matches." },
+];
+
+pub fn get_all_keywords() -> &'static [BuiltinKeyword] {
+    BUILTIN_KEYWORDS
+}
+
+// ------------------------------------------------------------------------
+// GLSL Builtin Variables
+// ------------------------------------------------------------------------
+
+pub struct BuiltinVariable {
+    pub name: &'static str,
+    pub var_type: &'static str,
+    pub stage: &'static str,
+    pub description: &'static str,
+}
+
+static BUILTIN_VARIABLES: &[BuiltinVariable] = &[
+    // Vertex Stage
+    BuiltinVariable { name: "gl_Position", var_type: "vec4", stage: "vert", description: "### `gl_Position`\n*out vec4 gl_Position*\n\nHomogeneous clip-space coordinates of the current vertex output." },
+    BuiltinVariable { name: "gl_PointSize", var_type: "float", stage: "vert", description: "### `gl_PointSize`\n*out float gl_PointSize*\n\nSpecifies the rasterized diameter in pixels of point primitives." },
+    BuiltinVariable { name: "gl_ClipDistance", var_type: "float[]", stage: "vert", description: "### `gl_ClipDistance`\n*out float gl_ClipDistance[]*\n\nSpecifies clip distance values against user-defined clipping planes." },
+    BuiltinVariable { name: "gl_CullDistance", var_type: "float[]", stage: "vert", description: "### `gl_CullDistance`\n*out float gl_CullDistance[]*\n\nSpecifies cull distance values against user-defined culling planes." },
+    BuiltinVariable { name: "gl_VertexIndex", var_type: "int", stage: "vert", description: "### `gl_VertexIndex`\n*in int gl_VertexIndex*\n\nVulkan index of the vertex currently being processed." },
+    BuiltinVariable { name: "gl_InstanceIndex", var_type: "int", stage: "vert", description: "### `gl_InstanceIndex`\n*in int gl_InstanceIndex*\n\nVulkan index of the current instance in an instanced draw call." },
+    BuiltinVariable { name: "gl_VertexID", var_type: "int", stage: "vert", description: "### `gl_VertexID`\n*in int gl_VertexID*\n\nOpenGL index of the vertex currently being processed." },
+    BuiltinVariable { name: "gl_InstanceID", var_type: "int", stage: "vert", description: "### `gl_InstanceID`\n*in int gl_InstanceID*\n\nOpenGL index of the current instance in an instanced draw call." },
+
+    // Fragment Stage
+    BuiltinVariable { name: "gl_FragCoord", var_type: "vec4", stage: "frag", description: "### `gl_FragCoord`\n*in vec4 gl_FragCoord*\n\nWindow-relative coordinates of the current fragment `(x, y, z, 1/w)`." },
+    BuiltinVariable { name: "gl_FragColor", var_type: "vec4", stage: "frag", description: "### `gl_FragColor`\n*out vec4 gl_FragColor*\n\nLegacy fragment color output (OpenGL core shaders prefer user-defined `out vec4 fragColor`)." },
+    BuiltinVariable { name: "gl_FragDepth", var_type: "float", stage: "frag", description: "### `gl_FragDepth`\n*out float gl_FragDepth*\n\nFragment depth value written to depth buffer; overrides interpolated depth." },
+    BuiltinVariable { name: "gl_FrontFacing", var_type: "bool", stage: "frag", description: "### `gl_FrontFacing`\n*in bool gl_FrontFacing*\n\nTrue if the current fragment belongs to a front-facing primitive." },
+    BuiltinVariable { name: "gl_PointCoord", var_type: "vec2", stage: "frag", description: "### `gl_PointCoord`\n*in vec2 gl_PointCoord*\n\nTwo-dimensional coordinates `[0, 1]` within a point primitive." },
+    BuiltinVariable { name: "gl_SampleID", var_type: "int", stage: "frag", description: "### `gl_SampleID`\n*in int gl_SampleID*\n\nSample number of the current fragment during per-sample shading." },
+    BuiltinVariable { name: "gl_SamplePosition", var_type: "vec2", stage: "frag", description: "### `gl_SamplePosition`\n*in vec2 gl_SamplePosition*\n\nSub-pixel offset `[0, 1]` of the sample currently being evaluated." },
+    BuiltinVariable { name: "gl_SampleMaskIn", var_type: "int[]", stage: "frag", description: "### `gl_SampleMaskIn`\n*in int gl_SampleMaskIn[]*\n\nBitmask of samples covered by the primitive generating the fragment." },
+    BuiltinVariable { name: "gl_SampleMask", var_type: "int[]", stage: "frag", description: "### `gl_SampleMask`\n*out int gl_SampleMask[]*\n\nOutput bitmask specifying which samples of the fragment should be written." },
+    BuiltinVariable { name: "gl_PrimitiveID", var_type: "int", stage: "frag", description: "### `gl_PrimitiveID`\n*in int gl_PrimitiveID*\n\nID of the primitive generated by earlier pipeline stages." },
+    BuiltinVariable { name: "gl_Layer", var_type: "int", stage: "frag", description: "### `gl_Layer`\n*out/in int gl_Layer*\n\nLayer index for layered rendering / cube map faces." },
+    BuiltinVariable { name: "gl_ViewportIndex", var_type: "int", stage: "frag", description: "### `gl_ViewportIndex`\n*out/in int gl_ViewportIndex*\n\nViewport index to which the primitive was directed." },
+
+    // Compute Stage
+    BuiltinVariable { name: "gl_NumWorkGroups", var_type: "uvec3", stage: "comp", description: "### `gl_NumWorkGroups`\n*in uvec3 gl_NumWorkGroups*\n\nTotal number of work groups dispatched in each dimension." },
+    BuiltinVariable { name: "gl_WorkGroupSize", var_type: "uvec3", stage: "comp", description: "### `gl_WorkGroupSize`\n*in uvec3 gl_WorkGroupSize*\n\nDimensions of a local work group defined by `layout(local_size_x = ...)`." },
+    BuiltinVariable { name: "gl_WorkGroupID", var_type: "uvec3", stage: "comp", description: "### `gl_WorkGroupID`\n*in uvec3 gl_WorkGroupID*\n\nThree-dimensional index of the current work group being executed." },
+    BuiltinVariable { name: "gl_LocalInvocationID", var_type: "uvec3", stage: "comp", description: "### `gl_LocalInvocationID`\n*in uvec3 gl_LocalInvocationID*\n\nThree-dimensional index of the invocation within the local work group." },
+    BuiltinVariable { name: "gl_GlobalInvocationID", var_type: "uvec3", stage: "comp", description: "### `gl_GlobalInvocationID`\n*in uvec3 gl_GlobalInvocationID*\n\nUnique global 3D index: `gl_WorkGroupID * gl_WorkGroupSize + gl_LocalInvocationID`." },
+    BuiltinVariable { name: "gl_LocalInvocationIndex", var_type: "uint", stage: "comp", description: "### `gl_LocalInvocationIndex`\n*in uint gl_LocalInvocationIndex*\n\n1D flattened index of the current invocation within the local work group." },
+];
+
+pub fn get_all_variables() -> &'static [BuiltinVariable] {
+    BUILTIN_VARIABLES
+}
+
+// ------------------------------------------------------------------------
+// GLSL Preprocessor Directives
+// ------------------------------------------------------------------------
+
+pub struct BuiltinDirective {
+    pub name: &'static str,
+    pub detail: &'static str,
+    pub description: &'static str,
+}
+
+static BUILTIN_DIRECTIVES: &[BuiltinDirective] = &[
+    BuiltinDirective { name: "#version", detail: "#version 460 core", description: "### `#version`\n*GLSL Preprocessor*\n\nSpecifies GLSL shading language version (e.g. `#version 460 core`)." },
+    BuiltinDirective { name: "#include", detail: "#include \"header.glsl\"", description: "### `#include`\n*GLSL Preprocessor / GL_GOOGLE_include_directive*\n\nIncludes an external GLSL header file." },
+    BuiltinDirective { name: "#define", detail: "#define NAME VALUE", description: "### `#define`\n*GLSL Preprocessor*\n\nDefines a preprocessor macro or constant." },
+    BuiltinDirective { name: "#undef", detail: "#undef NAME", description: "### `#undef`\n*GLSL Preprocessor*\n\nUndefines a previously defined preprocessor macro." },
+    BuiltinDirective { name: "#if", detail: "#if EXPRESSION", description: "### `#if`\n*GLSL Preprocessor*\n\nConditional preprocessor compilation." },
+    BuiltinDirective { name: "#ifdef", detail: "#ifdef NAME", description: "### `#ifdef`\n*GLSL Preprocessor*\n\nCompiles block if macro NAME is defined." },
+    BuiltinDirective { name: "#ifndef", detail: "#ifndef NAME", description: "### `#ifndef`\n*GLSL Preprocessor*\n\nCompiles block if macro NAME is not defined." },
+    BuiltinDirective { name: "#elif", detail: "#elif EXPRESSION", description: "### `#elif`\n*GLSL Preprocessor*\n\nElse-if conditional preprocessor branch." },
+    BuiltinDirective { name: "#else", detail: "#else", description: "### `#else`\n*GLSL Preprocessor*\n\nElse conditional preprocessor branch." },
+    BuiltinDirective { name: "#endif", detail: "#endif", description: "### `#endif`\n*GLSL Preprocessor*\n\nCloses conditional preprocessor block." },
+    BuiltinDirective { name: "#extension", detail: "#extension EXT : enable", description: "### `#extension`\n*GLSL Preprocessor*\n\nEnables, disables, or requires a GLSL extension." },
+    BuiltinDirective { name: "#pragma", detail: "#pragma ...", description: "### `#pragma`\n*GLSL Preprocessor*\n\nCompiler directive or target configuration." },
+    BuiltinDirective { name: "#line", detail: "#line NUMBER", description: "### `#line`\n*GLSL Preprocessor*\n\nSets line number for compiler diagnostic reporting." },
+    BuiltinDirective { name: "#error", detail: "#error MESSAGE", description: "### `#error`\n*GLSL Preprocessor*\n\nEmits a compiler error with the specified message." },
+];
+
+pub fn get_all_directives() -> &'static [BuiltinDirective] {
+    BUILTIN_DIRECTIVES
+}
+
