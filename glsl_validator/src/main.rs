@@ -14,10 +14,16 @@ use std::thread;
 use std::os::windows::process::CommandExt;
 
 fn create_command<S: AsRef<std::ffi::OsStr>>(prog: S) -> Command {
-    let mut cmd = Command::new(prog);
     #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    cmd
+    {
+        let mut cmd = Command::new(prog);
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new(prog)
+    }
 }
 
 fn get_log_path() -> PathBuf {
