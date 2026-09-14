@@ -2,6 +2,30 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.14] - 2026-09-14
+
+### Added
+- **Suppression of Signature Help on Function Declarations:** Signature help popup is now intelligently suppressed when authoring function declarations and new overload headers (e.g. `vec3 calculateNormal(mat4 normal, )`). This prevents previous function signatures from intrusively appearing while defining new overloads.
+- **Smart Active Overload Matching:** Signature help for overloaded function calls now prioritizes the overload whose parameter count best matches the currently active argument index.
+- **Vulkan Interface Block & Instance Autocompletion:** Full support for `layout(set = ..., binding = ...) uniform BlockName { ... } instanceName;`. Both the block interface type, the instance identifier (`ubo`), and all inner member fields (`projection`, `view`, etc.) are recognized, autocompleted with type information, and navigable via F12.
+- **Dedicated Vulkan Snippets:** Added `vert-vk`, `frag-vk`, and `ubo-vk` templates to `snippets.json` and language server completions for plug-and-play Vulkan GLSL authoring without manual `#version` edits.
+- **Windows Console Popup Suppression (`CREATE_NO_WINDOW`):** Applied `0x0800_0000` to all process invocations (`glslangValidator`, `clang-format`, `find_in_path`), eliminating command prompt window flashes on Windows.
+- **High-Speed macOS GitHub Actions Runners:** Upgraded CI and Release pipelines to use `macos-latest` (Apple Silicon M1/M2) for Intel macOS cross-compilation, reducing build times from 10+ minutes to 40 seconds.
+- **Official Zed Publishing Guide:** Added complete publishing documentation (`ZED_PUBLISHING_GUIDE.md` and `ZED_PUBLISHING_GUIDE.pdf`) detailing step-by-step submission to the official Zed Extension Registry.
+
+### Fixed
+- **Cross-Platform `unused_mut` Warning:** Resolved platform-conditional `mut` warning on non-Windows targets, achieving zero-warning compliance under `-D warnings` on Linux, macOS, and Windows.
+
+---
+
+## [0.1.13] - 2026-09-14
+
+### Fixed
+- **Clippy Collapsible Ifs:** Refactored nested if-conditions in `src/lib.rs` into idiomatic Rust 2024 let-chain expressions.
+- **Too Many Arguments Refactoring:** Cleaned up LSP handler parameter signatures with unified context structs.
+
+---
+
 ## [0.1.12] - 2026-09-14
 
 ### Added
