@@ -411,11 +411,160 @@ pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
     dirs
 }
 
+/// Extracts the `#version ...` line and any leading `#extension ...` directives from GLSL text.
+fn extract_version_and_extensions(text: &str) -> Option<String> {
+    let mut version_line: Option<String> = None;
+    let mut extensions: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("#version") {
+            version_line = Some(trimmed.to_string());
+        } else if trimmed.starts_with("#extension") {
+            extensions.push(trimmed.to_string());
+        } else if !trimmed.starts_with('#') {
+            break;
+        }
+    }
+
+    let ver = version_line?;
+    let mut header = String::with_capacity(ver.len() + 64);
+    header.push_str(&ver);
+    header.push('\n');
+    for ext in extensions {
+        header.push_str(&ext);
+        header.push('\n');
+    }
+    header.push_str("#line 1\n");
+    Some(header)
+}
+
+/// Resolves the optimal GLSL version header for a shader or header file:
+/// 1. If the file has `#version`, returns None (no injection).
+/// 2. If user configured `default_version`, returns `#version <ver>\n#line 1\n`.
+/// 3. Checks in-memory open documents (`doc_cache`) for parent files `#include`ing this file.
+/// 4. Checks sibling files on disk for parent files `#include`ing this file.
+/// 5. Checks if any other open file in `doc_cache` declares `#version`.
+/// 6. Fallback: `#version 460 core\n#line 1\n` for OpenGL, `#version 460\n#line 1\n` for Vulkan.
+fn resolve_glsl_version_header(
+    uri: &str,
+    text: &str,
+    target: TargetApi,
+    doc_cache: &HashMap<String, String>,
+    configured_version: Option<&str>,
+) -> Option<String> {
+    // 1. File already explicitly declares #version
+    if text.lines().any(|l| l.trim().starts_with("#version")) {
+        return None;
+    }
+
+    // 2. User configured default_version
+    if let Some(cfg_ver) = configured_version {
+        let trimmed = cfg_ver.trim();
+        if !trimmed.is_empty() {
+            let ver_clean = if trimmed.starts_with("#version") {
+                trimmed.to_string()
+            } else {
+                format!("#version {trimmed}")
+            };
+            return Some(format!("{ver_clean}\n#line 1\n"));
+        }
+    }
+
+    let filename = uri_to_path(uri)
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| {
+            uri.rsplit(['/', '\\']).next().unwrap_or("").to_string()
+        });
+
+    // 3. Step A: Check in-memory open documents (doc_cache) for parent files including this file
+    if !filename.is_empty() {
+        for (open_uri, open_text) in doc_cache {
+            if open_uri == uri {
+                continue;
+            }
+            for line in open_text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("#include") && trimmed.contains(&filename) {
+                    if let Some(header) = extract_version_and_extensions(open_text) {
+                        log(&format!("Resolved #version header from parent open document '{open_uri}' for '{uri}'"));
+                        return Some(header);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Step B: Check sibling files on disk (same directory)
+    if let Some(file_path) = uri_to_path(uri) {
+        if let Some(parent_dir) = file_path.parent() {
+            if let Ok(entries) = std::fs::read_dir(parent_dir) {
+                let mut checked_count = 0;
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path == file_path || !path.is_file() {
+                        continue;
+                    }
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    if !matches!(ext, "vert" | "frag" | "geom" | "comp" | "tesc" | "tese" | "glsl") {
+                        continue;
+                    }
+
+                    checked_count += 1;
+                    if checked_count > 32 {
+                        break;
+                    }
+
+                    if let Ok(file) = std::fs::File::open(&path) {
+                        let reader = io::BufReader::new(file);
+                        let mut first_lines = Vec::new();
+                        for l in reader.lines().take(40).flatten() {
+                            first_lines.push(l);
+                        }
+                        let sibling_text = first_lines.join("\n");
+                        if !filename.is_empty()
+                            && sibling_text.lines().any(|l| l.trim().starts_with("#include") && l.contains(&filename))
+                        {
+                            if let Some(header) = extract_version_and_extensions(&sibling_text) {
+                                log(&format!("Resolved #version header from sibling file '{}' for '{uri}'", path.display()));
+                                return Some(header);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Step C: Project-wide fallback - check if ANY open document in doc_cache has #version
+    for (open_uri, open_text) in doc_cache {
+        if open_uri != uri {
+            if let Some(header) = extract_version_and_extensions(open_text) {
+                log(&format!("Resolved project-wide #version from open document '{open_uri}' for '{uri}'"));
+                return Some(header);
+            }
+        }
+    }
+
+    // 6. Step D: Standard default fallback
+    let default_header = match target {
+        TargetApi::OpenGl => "#version 460 core\n#line 1\n",
+        TargetApi::Vulkan => "#version 460\n#line 1\n",
+    };
+    log(&format!("Using standard default fallback header for '{uri}'"));
+    Some(default_header.to_string())
+}
+
 fn validate_shader(
     uri: &str,
     text: &str,
     default_target: TargetApi,
     custom_glslang: Option<&str>,
+    doc_cache: &HashMap<String, String>,
+    configured_version: Option<&str>,
 ) -> Vec<Value> {
     let stage = get_stage_from_uri(uri, text);
     let target = detect_target_api(text, default_target);
@@ -446,15 +595,8 @@ fn validate_shader(
         inc_dirs.len()
     ));
 
-    let has_version = text.lines().any(|l| l.trim().starts_with("#version"));
-    let version_header = if !has_version {
-        match target {
-            TargetApi::OpenGl => "#version 460 core\n#line 1\n",
-            TargetApi::Vulkan => "#version 460\n#line 1\n",
-        }
-    } else {
-        ""
-    };
+    let version_header = resolve_glsl_version_header(uri, text, target, doc_cache, configured_version)
+        .unwrap_or_default();
     let input_text = if !version_header.is_empty() {
         format!("{version_header}{text}")
     } else {
@@ -963,7 +1105,21 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         items.extend(generate_snippet_completions(word));
     }
 
-    let following_has_paren = line[safe_col..].trim_start().starts_with('(');
+    let mut word_end = safe_col;
+    for (i, c) in line[safe_col..].char_indices() {
+        if c.is_alphanumeric() || c == '_' {
+            word_end = safe_col + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    let following_has_paren = line[word_end..].trim_start().starts_with('(');
+
+    let replace_range = json!({
+        "start": { "line": line_idx, "character": word_start },
+        "end": { "line": line_idx, "character": word_end }
+    });
 
     // 2. User functions from current file and recursively included files (#include)
     let user_funcs = signature::resolve_includes_and_scan(uri, doc, doc_cache);
@@ -999,6 +1155,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                 },
                 "insertText": insert_text,
                 "insertTextFormat": insert_format,
+                "textEdit": {
+                    "range": replace_range,
+                    "newText": insert_text
+                },
                 "sortText": format!("01_{}", func.name),
             }));
         }
@@ -1032,7 +1192,11 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                 },
                 "insertText": insert_text,
                 "insertTextFormat": insert_format,
-                "sortText": format!("02_{}", builtin.name),
+                "textEdit": {
+                    "range": replace_range,
+                    "newText": insert_text
+                },
+                "sortText": format!("01_{}", builtin.name),
             }));
         }
     }
@@ -1598,6 +1762,7 @@ struct ValidationRequest {
     text: String,
     target: TargetApi,
     glslang_path: Option<String>,
+    configured_version: Option<String>,
 }
 
 fn main() -> io::Result<()> {
@@ -1607,8 +1772,10 @@ fn main() -> io::Result<()> {
 
     let (tx_val, rx_val) = mpsc::channel::<ValidationRequest>();
     let stdout_shared = Arc::new(Mutex::new(io::stdout()));
+    let doc_cache: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let out_for_worker = Arc::clone(&stdout_shared);
+    let doc_cache_worker = Arc::clone(&doc_cache);
     thread::spawn(move || {
         while let Ok(mut req) = rx_val.recv() {
             // Drain queue so rapid keystrokes don't pile up redundant compilations
@@ -1616,7 +1783,8 @@ fn main() -> io::Result<()> {
                 if newer.uri == req.uri {
                     req = newer;
                 } else {
-                    let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref());
+                    let cache = doc_cache_worker.lock().map(|m| m.clone()).unwrap_or_default();
+                    let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref(), &cache, req.configured_version.as_deref());
                     let notif = json!({
                         "jsonrpc": "2.0",
                         "method": "textDocument/publishDiagnostics",
@@ -1632,7 +1800,8 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref());
+            let cache = doc_cache_worker.lock().map(|m| m.clone()).unwrap_or_default();
+            let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref(), &cache, req.configured_version.as_deref());
             let notif = json!({
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
@@ -1658,7 +1827,7 @@ fn main() -> io::Result<()> {
     let mut default_engine = FormatterEngine::ClangFormat;
     let mut custom_glslang_path: Option<String> = None;
     let mut custom_clang_path: Option<String> = None;
-    let mut doc_cache: HashMap<String, String> = HashMap::new();
+    let mut custom_default_version: Option<String> = None;
 
     loop {
         let mut content_length: Option<usize> = None;
@@ -1724,6 +1893,10 @@ fn main() -> io::Result<()> {
                             custom_clang_path = Some(p.to_string());
                             log(&format!("Initialized with custom clang_format_path={p}"));
                         }
+                        if let Some(v) = opts.get("default_version").and_then(|v| v.as_str()) {
+                            custom_default_version = Some(v.to_string());
+                            log(&format!("Initialized with custom default_version={v}"));
+                        }
                     }
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1747,7 +1920,8 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/signatureHelp" => {
-                    let sig_help = signature::handle_signature_help(&msg, &doc_cache);
+                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
+                    let sig_help = signature::handle_signature_help(&msg, &cache_lock);
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -1756,7 +1930,8 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/hover" => {
-                    let hover_info = signature::handle_hover(&msg, &doc_cache);
+                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
+                    let hover_info = signature::handle_hover(&msg, &cache_lock);
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -1765,7 +1940,8 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/completion" => {
-                    let items = handle_completion(&msg, &doc_cache);
+                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
+                    let items = handle_completion(&msg, &cache_lock);
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -1776,9 +1952,9 @@ fn main() -> io::Result<()> {
                 "textDocument/formatting" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
                     let options = msg["params"].get("options");
-                    let edits = doc_cache
-                        .get(uri)
-                        .and_then(|text| format_document(uri, text, options, default_engine, custom_clang_path.as_deref()))
+                    let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
+                    let edits = cached_text
+                        .and_then(|text| format_document(uri, &text, options, default_engine, custom_clang_path.as_deref()))
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1791,9 +1967,9 @@ fn main() -> io::Result<()> {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
                     let options = msg["params"].get("options");
                     let range = msg["params"].get("range");
-                    let edits = doc_cache
-                        .get(uri)
-                        .and_then(|text| format_range(uri, text, range, options, default_engine, custom_clang_path.as_deref()))
+                    let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
+                    let edits = cached_text
+                        .and_then(|text| format_range(uri, &text, range, options, default_engine, custom_clang_path.as_deref()))
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1804,9 +1980,9 @@ fn main() -> io::Result<()> {
                 }
                 "textDocument/documentColor" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
-                    let colors = doc_cache
-                        .get(uri)
-                        .map(|text| handle_document_color(text))
+                    let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
+                    let colors = cached_text
+                        .map(|text| handle_document_color(&text))
                         .unwrap_or_else(|| json!([]));
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -1816,7 +1992,8 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "textDocument/colorPresentation" => {
-                    let presentations = handle_color_presentation(&msg, &doc_cache);
+                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
+                    let presentations = handle_color_presentation(&msg, &cache_lock);
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -1892,6 +2069,16 @@ fn main() -> io::Result<()> {
                         log(&format!("Updated custom_clang_path={p}"));
                     }
 
+                    if let Some(v) = settings.get("default_version").and_then(|v| v.as_str())
+                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("default_version")).and_then(|v| v.as_str()))
+                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("default_version")).and_then(|v| v.as_str())) {
+                        if custom_default_version.as_deref() != Some(v) {
+                            custom_default_version = Some(v.to_string());
+                            log(&format!("Updated default_version={v}"));
+                            revalidate = true;
+                        }
+                    }
+
                     if let Some(f) = settings.get("formatter").and_then(|v| v.as_str()) {
                         default_engine = FormatterEngine::parse_engine(f);
                         log(&format!("Updated default_engine to {:?}", default_engine));
@@ -1904,12 +2091,14 @@ fn main() -> io::Result<()> {
                     }
 
                     if revalidate {
-                        for (uri, text) in &doc_cache {
+                        let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
+                        for (uri, text) in &cache_lock {
                             let _ = tx_val.send(ValidationRequest {
                                 uri: uri.clone(),
                                 text: text.clone(),
                                 target: default_target,
                                 glslang_path: custom_glslang_path.clone(),
+                                configured_version: custom_default_version.clone(),
                             });
                         }
                     }
@@ -1921,12 +2110,15 @@ fn main() -> io::Result<()> {
                     let text = doc.get("text").and_then(|t| t.as_str()).unwrap_or("");
                     log(&format!("didOpen: {uri} (length={})", text.len()));
 
-                    doc_cache.insert(uri.to_string(), text.to_string());
+                    if let Ok(mut lock) = doc_cache.lock() {
+                        lock.insert(uri.to_string(), text.to_string());
+                    }
                     let _ = tx_val.send(ValidationRequest {
                         uri: uri.to_string(),
                         text: text.to_string(),
                         target: default_target,
                         glslang_path: custom_glslang_path.clone(),
+                        configured_version: custom_default_version.clone(),
                     });
                 }
             }
@@ -1937,12 +2129,15 @@ fn main() -> io::Result<()> {
                         if let Some(first_change) = changes.first() {
                             if let Some(text) = first_change["text"].as_str() {
                                 log(&format!("didChange: {uri} (length={})", text.len()));
-                                doc_cache.insert(uri.to_string(), text.to_string());
+                                if let Ok(mut lock) = doc_cache.lock() {
+                                    lock.insert(uri.to_string(), text.to_string());
+                                }
                                 let _ = tx_val.send(ValidationRequest {
                                     uri: uri.to_string(),
                                     text: text.to_string(),
                                     target: default_target,
                                     glslang_path: custom_glslang_path.clone(),
+                                    configured_version: custom_default_version.clone(),
                                 });
                             }
                         }
@@ -1953,12 +2148,14 @@ fn main() -> io::Result<()> {
                 if let Some(params) = msg["params"].as_object() {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     log(&format!("didSave: {uri}"));
-                    if let Some(text) = doc_cache.get(uri) {
+                    let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
+                    if let Some(text) = cached_text {
                         let _ = tx_val.send(ValidationRequest {
                             uri: uri.to_string(),
-                            text: text.clone(),
+                            text,
                             target: default_target,
                             glslang_path: custom_glslang_path.clone(),
+                            configured_version: custom_default_version.clone(),
                         });
                     }
                 }
@@ -1967,7 +2164,9 @@ fn main() -> io::Result<()> {
                 if let Some(params) = msg["params"].as_object() {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     log(&format!("didClose: {uri}"));
-                    doc_cache.remove(uri);
+                    if let Ok(mut lock) = doc_cache.lock() {
+                        lock.remove(uri);
+                    }
 
                     let notif = json!({
                         "jsonrpc": "2.0",
@@ -2265,9 +2464,73 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
     return normalMatrix * aNormal;
 }
 "#;
-        let diags = validate_shader("file:///shader.vert", code, TargetApi::OpenGl, None);
+        let cache = HashMap::new();
+        let diags = validate_shader("file:///shader.vert", code, TargetApi::OpenGl, None, &cache, None);
         // If glslangValidator is installed, it must produce 0 errors.
         let errors: Vec<_> = diags.iter().filter(|d| d["severity"] == 1).collect();
         assert!(errors.is_empty(), "Should compile modern inverse/transpose without errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_completion_transpose_and_inverse() {
+        let mut doc_cache = HashMap::new();
+        let uri = "file:///shader.vert";
+        let code = "mat3 inv = inv";
+        doc_cache.insert(uri.to_string(), code.to_string());
+
+        let req_inv = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": 14 }
+            }
+        });
+        let res_inv = handle_completion(&req_inv, &doc_cache);
+        let items_inv = res_inv.as_array().expect("items");
+        let inv_item = items_inv.iter().find(|it| it["label"] == "inverse");
+        assert!(inv_item.is_some(), "inverse must be found in completions");
+        let item = inv_item.unwrap();
+        assert_eq!(item["insertText"], "inverse($1)$0");
+        assert_eq!(item["insertTextFormat"], 2);
+        assert!(item.get("textEdit").is_some());
+
+        // Test transpose
+        let code_trans = "mat3 normal = trans";
+        doc_cache.insert(uri.to_string(), code_trans.to_string());
+        let req_trans = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 0, "character": 19 }
+            }
+        });
+        let res_trans = handle_completion(&req_trans, &doc_cache);
+        let items_trans = res_trans.as_array().expect("items");
+        let trans_item = items_trans.iter().find(|it| it["label"] == "transpose");
+        assert!(trans_item.is_some(), "transpose must be found in completions");
+        let item_t = trans_item.unwrap();
+        assert_eq!(item_t["insertText"], "transpose($1)$0");
+        assert_eq!(item_t["insertTextFormat"], 2);
+        assert_eq!(item_t["textEdit"]["newText"], "transpose($1)$0");
+    }
+
+    #[test]
+    fn test_version_resolution_from_parent_include() {
+        let mut doc_cache = HashMap::new();
+        let main_code = "#version 330 core\n#extension GL_ARB_explicit_attrib_location : enable\n#include \"common.glsl\"\n";
+        doc_cache.insert("file:///project/main.vert".to_string(), main_code.to_string());
+
+        let common_code = "vec3 testFunc(vec3 v) { return inverse(mat3(v.x)) * v; }\n";
+        let resolved = resolve_glsl_version_header(
+            "file:///project/common.glsl",
+            common_code,
+            TargetApi::OpenGl,
+            &doc_cache,
+            None,
+        );
+
+        assert!(resolved.is_some());
+        let header = resolved.unwrap();
+        assert!(header.contains("#version 330 core"), "Must inherit #version 330 core from parent main.vert: {header}");
+        assert!(header.contains("#extension GL_ARB_explicit_attrib_location : enable"), "Must inherit extensions: {header}");
+        assert!(header.ends_with("#line 1\n"), "Must reset line counter with #line 1: {header}");
     }
 }

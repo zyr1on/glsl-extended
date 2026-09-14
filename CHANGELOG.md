@@ -2,6 +2,16 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.10] - 2026-09-14
+
+### Added
+- **Parent Version Inheritance for Include Files:** Automatically inspects parent shader files (in open editor buffers `doc_cache` and sibling directory files) that `#include` the current file, inheriting their exact `#version` and active `#extension` directives. When editing header files like `common.glsl`, they are now compiled under the exact GLSL profile of the including shader without requiring redundant `#version` tags.
+- **Configurable `default_version` Setting:** Users can optionally specify `"default_version"` (e.g. `"330 core"` or `"450 core"`) under `glsl_validator` initialization options or settings for workspace-wide fallback control.
+- **Comprehensive GLSL Core Built-ins Database:** Added 25+ missing core GLSL 4.6 functions to `docs.rs` including matrix functions (`transpose`, `inverse`, `determinant`, `matrixCompMult`, `outerProduct`), vector relational functions (`lessThan`, `greaterThan`, `equal`, `notEqual`, `any`, `all`, `not`), fused math (`fma`), bitwise operations (`bitfieldExtract`, `bitCount`, `findLSB`, etc.), and atomics (`atomicAdd`).
+- **Precision Snippet Completions with `textEdit`:** Function autocompletions now supply exact character replacement ranges (`textEdit`) and optimized priority ranking (`sortText: "01_..."`), guaranteeing reliable snippet expansion with parentheses and cursor positioning inside `()` across Zed and LSP clients.
+
+---
+
 ## [0.1.9] - 2026-09-14
 
 ### Added

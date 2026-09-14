@@ -559,6 +559,291 @@ static BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
             BuiltinOverload { label: "void groupMemoryBarrier()", params: &[] },
         ],
     },
+    // ------------------------------------------------------------------------
+    // Matrix Functions
+    // ------------------------------------------------------------------------
+    BuiltinFunction {
+        name: "transpose",
+        description: "### `transpose`\n*docs.gl / OpenGL 4.6*\n\nCalculates the transpose of a matrix.\n\n$$\\text{transpose}(m)_{ij} = m_{ji}$$\n\n**Parameters:**\n* `m`: Specifies the matrix to transpose.",
+        overloads: &[
+            BuiltinOverload { label: "mat2 transpose(mat2 m)", params: &["mat2 m"] },
+            BuiltinOverload { label: "mat3 transpose(mat3 m)", params: &["mat3 m"] },
+            BuiltinOverload { label: "mat4 transpose(mat4 m)", params: &["mat4 m"] },
+            BuiltinOverload { label: "mat2x3 transpose(mat3x2 m)", params: &["mat3x2 m"] },
+            BuiltinOverload { label: "mat3x2 transpose(mat2x3 m)", params: &["mat2x3 m"] },
+            BuiltinOverload { label: "mat2x4 transpose(mat4x2 m)", params: &["mat4x2 m"] },
+            BuiltinOverload { label: "mat4x2 transpose(mat2x4 m)", params: &["mat2x4 m"] },
+            BuiltinOverload { label: "mat3x4 transpose(mat4x3 m)", params: &["mat4x3 m"] },
+            BuiltinOverload { label: "mat4x3 transpose(mat3x4 m)", params: &["mat3x4 m"] },
+            BuiltinOverload { label: "dmat2 transpose(dmat2 m)", params: &["dmat2 m"] },
+            BuiltinOverload { label: "dmat3 transpose(dmat3 m)", params: &["dmat3 m"] },
+            BuiltinOverload { label: "dmat4 transpose(dmat4 m)", params: &["dmat4 m"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "inverse",
+        description: "### `inverse`\n*docs.gl / OpenGL 4.6*\n\nCalculates the inverse of a matrix.\n\n$$\\text{inverse}(m) \\cdot m = I$$\n\n**Parameters:**\n* `m`: Specifies the matrix of which to take the inverse.",
+        overloads: &[
+            BuiltinOverload { label: "mat2 inverse(mat2 m)", params: &["mat2 m"] },
+            BuiltinOverload { label: "mat3 inverse(mat3 m)", params: &["mat3 m"] },
+            BuiltinOverload { label: "mat4 inverse(mat4 m)", params: &["mat4 m"] },
+            BuiltinOverload { label: "dmat2 inverse(dmat2 m)", params: &["dmat2 m"] },
+            BuiltinOverload { label: "dmat3 inverse(dmat3 m)", params: &["dmat3 m"] },
+            BuiltinOverload { label: "dmat4 inverse(dmat4 m)", params: &["dmat4 m"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "determinant",
+        description: "### `determinant`\n*docs.gl / OpenGL 4.6*\n\nCalculates the determinant of a square matrix.\n\n**Parameters:**\n* `m`: Specifies the square matrix to evaluate.",
+        overloads: &[
+            BuiltinOverload { label: "float determinant(mat2 m)", params: &["mat2 m"] },
+            BuiltinOverload { label: "float determinant(mat3 m)", params: &["mat3 m"] },
+            BuiltinOverload { label: "float determinant(mat4 m)", params: &["mat4 m"] },
+            BuiltinOverload { label: "double determinant(dmat2 m)", params: &["dmat2 m"] },
+            BuiltinOverload { label: "double determinant(dmat3 m)", params: &["dmat3 m"] },
+            BuiltinOverload { label: "double determinant(dmat4 m)", params: &["dmat4 m"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "matrixCompMult",
+        description: "### `matrixCompMult`\n*docs.gl / OpenGL 4.6*\n\nPerforms component-wise multiplication of two matrices.\n\n$$z_{ij} = x_{ij} \\cdot y_{ij}$$\n\n**Parameters:**\n* `x`: Specifies the first matrix.\n* `y`: Specifies the second matrix.",
+        overloads: &[
+            BuiltinOverload { label: "mat2 matrixCompMult(mat2 x, mat2 y)", params: &["mat2 x", "mat2 y"] },
+            BuiltinOverload { label: "mat3 matrixCompMult(mat3 x, mat3 y)", params: &["mat3 x", "mat3 y"] },
+            BuiltinOverload { label: "mat4 matrixCompMult(mat4 x, mat4 y)", params: &["mat4 x", "mat4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "outerProduct",
+        description: "### `outerProduct`\n*docs.gl / OpenGL 4.6*\n\nCalculates the outer product of a column vector and row vector.\n\n$$m_{ij} = c_i \\cdot r_j$$\n\n**Parameters:**\n* `c`: Specifies the column vector.\n* `r`: Specifies the row vector.",
+        overloads: &[
+            BuiltinOverload { label: "mat2 outerProduct(vec2 c, vec2 r)", params: &["vec2 c", "vec2 r"] },
+            BuiltinOverload { label: "mat3 outerProduct(vec3 c, vec3 r)", params: &["vec3 c", "vec3 r"] },
+            BuiltinOverload { label: "mat4 outerProduct(vec4 c, vec4 r)", params: &["vec4 c", "vec4 r"] },
+        ],
+    },
+
+    // ------------------------------------------------------------------------
+    // Vector Relational Functions
+    // ------------------------------------------------------------------------
+    BuiltinFunction {
+        name: "lessThan",
+        description: "### `lessThan`\n*docs.gl / OpenGL 4.6*\n\nPerforms a component-wise less-than comparison ($x < y$).",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 lessThan(vec2 x, vec2 y)", params: &["vec2 x", "vec2 y"] },
+            BuiltinOverload { label: "bvec3 lessThan(vec3 x, vec3 y)", params: &["vec3 x", "vec3 y"] },
+            BuiltinOverload { label: "bvec4 lessThan(vec4 x, vec4 y)", params: &["vec4 x", "vec4 y"] },
+            BuiltinOverload { label: "bvec2 lessThan(ivec2 x, ivec2 y)", params: &["ivec2 x", "ivec2 y"] },
+            BuiltinOverload { label: "bvec3 lessThan(ivec3 x, ivec3 y)", params: &["ivec3 x", "ivec3 y"] },
+            BuiltinOverload { label: "bvec4 lessThan(ivec4 x, ivec4 y)", params: &["ivec4 x", "ivec4 y"] },
+            BuiltinOverload { label: "bvec2 lessThan(uvec2 x, uvec2 y)", params: &["uvec2 x", "uvec2 y"] },
+            BuiltinOverload { label: "bvec3 lessThan(uvec3 x, uvec3 y)", params: &["uvec3 x", "uvec3 y"] },
+            BuiltinOverload { label: "bvec4 lessThan(uvec4 x, uvec4 y)", params: &["uvec4 x", "uvec4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "lessThanEqual",
+        description: "### `lessThanEqual`\n*docs.gl / OpenGL 4.6*\n\nPerforms a component-wise less-than-or-equal comparison ($x \\le y$).",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 lessThanEqual(vec2 x, vec2 y)", params: &["vec2 x", "vec2 y"] },
+            BuiltinOverload { label: "bvec3 lessThanEqual(vec3 x, vec3 y)", params: &["vec3 x", "vec3 y"] },
+            BuiltinOverload { label: "bvec4 lessThanEqual(vec4 x, vec4 y)", params: &["vec4 x", "vec4 y"] },
+            BuiltinOverload { label: "bvec2 lessThanEqual(ivec2 x, ivec2 y)", params: &["ivec2 x", "ivec2 y"] },
+            BuiltinOverload { label: "bvec3 lessThanEqual(ivec3 x, ivec3 y)", params: &["ivec3 x", "ivec3 y"] },
+            BuiltinOverload { label: "bvec4 lessThanEqual(ivec4 x, ivec4 y)", params: &["ivec4 x", "ivec4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "greaterThan",
+        description: "### `greaterThan`\n*docs.gl / OpenGL 4.6*\n\nPerforms a component-wise greater-than comparison ($x > y$).",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 greaterThan(vec2 x, vec2 y)", params: &["vec2 x", "vec2 y"] },
+            BuiltinOverload { label: "bvec3 greaterThan(vec3 x, vec3 y)", params: &["vec3 x", "vec3 y"] },
+            BuiltinOverload { label: "bvec4 greaterThan(vec4 x, vec4 y)", params: &["vec4 x", "vec4 y"] },
+            BuiltinOverload { label: "bvec2 greaterThan(ivec2 x, ivec2 y)", params: &["ivec2 x", "ivec2 y"] },
+            BuiltinOverload { label: "bvec3 greaterThan(ivec3 x, ivec3 y)", params: &["ivec3 x", "ivec3 y"] },
+            BuiltinOverload { label: "bvec4 greaterThan(ivec4 x, ivec4 y)", params: &["ivec4 x", "ivec4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "greaterThanEqual",
+        description: "### `greaterThanEqual`\n*docs.gl / OpenGL 4.6*\n\nPerforms a component-wise greater-than-or-equal comparison ($x \\ge y$).",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 greaterThanEqual(vec2 x, vec2 y)", params: &["vec2 x", "vec2 y"] },
+            BuiltinOverload { label: "bvec3 greaterThanEqual(vec3 x, vec3 y)", params: &["vec3 x", "vec3 y"] },
+            BuiltinOverload { label: "bvec4 greaterThanEqual(vec4 x, vec4 y)", params: &["vec4 x", "vec4 y"] },
+            BuiltinOverload { label: "bvec2 greaterThanEqual(ivec2 x, ivec2 y)", params: &["ivec2 x", "ivec2 y"] },
+            BuiltinOverload { label: "bvec3 greaterThanEqual(ivec3 x, ivec3 y)", params: &["ivec3 x", "ivec3 y"] },
+            BuiltinOverload { label: "bvec4 greaterThanEqual(ivec4 x, ivec4 y)", params: &["ivec4 x", "ivec4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "equal",
+        description: "### `equal`\n*docs.gl / OpenGL 4.6*\n\nReturns a component-wise boolean vector comparing if $x == y$.",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 equal(vec2 x, vec2 y)", params: &["vec2 x", "vec2 y"] },
+            BuiltinOverload { label: "bvec3 equal(vec3 x, vec3 y)", params: &["vec3 x", "vec3 y"] },
+            BuiltinOverload { label: "bvec4 equal(vec4 x, vec4 y)", params: &["vec4 x", "vec4 y"] },
+            BuiltinOverload { label: "bvec2 equal(ivec2 x, ivec2 y)", params: &["ivec2 x", "ivec2 y"] },
+            BuiltinOverload { label: "bvec3 equal(ivec3 x, ivec3 y)", params: &["ivec3 x", "ivec3 y"] },
+            BuiltinOverload { label: "bvec4 equal(ivec4 x, ivec4 y)", params: &["ivec4 x", "ivec4 y"] },
+            BuiltinOverload { label: "bvec2 equal(bvec2 x, bvec2 y)", params: &["bvec2 x", "bvec2 y"] },
+            BuiltinOverload { label: "bvec3 equal(bvec3 x, bvec3 y)", params: &["bvec3 x", "bvec3 y"] },
+            BuiltinOverload { label: "bvec4 equal(bvec4 x, bvec4 y)", params: &["bvec4 x", "bvec4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "notEqual",
+        description: "### `notEqual`\n*docs.gl / OpenGL 4.6*\n\nReturns a component-wise boolean vector comparing if $x \\ne y$.",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 notEqual(vec2 x, vec2 y)", params: &["vec2 x", "vec2 y"] },
+            BuiltinOverload { label: "bvec3 notEqual(vec3 x, vec3 y)", params: &["vec3 x", "vec3 y"] },
+            BuiltinOverload { label: "bvec4 notEqual(vec4 x, vec4 y)", params: &["vec4 x", "vec4 y"] },
+            BuiltinOverload { label: "bvec2 notEqual(ivec2 x, ivec2 y)", params: &["ivec2 x", "ivec2 y"] },
+            BuiltinOverload { label: "bvec3 notEqual(ivec3 x, ivec3 y)", params: &["ivec3 x", "ivec3 y"] },
+            BuiltinOverload { label: "bvec4 notEqual(ivec4 x, ivec4 y)", params: &["ivec4 x", "ivec4 y"] },
+            BuiltinOverload { label: "bvec2 notEqual(bvec2 x, bvec2 y)", params: &["bvec2 x", "bvec2 y"] },
+            BuiltinOverload { label: "bvec3 notEqual(bvec3 x, bvec3 y)", params: &["bvec3 x", "bvec3 y"] },
+            BuiltinOverload { label: "bvec4 notEqual(bvec4 x, bvec4 y)", params: &["bvec4 x", "bvec4 y"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "any",
+        description: "### `any`\n*docs.gl / OpenGL 4.6*\n\nReturns `true` if any component of a boolean vector is true.",
+        overloads: &[
+            BuiltinOverload { label: "bool any(bvec2 x)", params: &["bvec2 x"] },
+            BuiltinOverload { label: "bool any(bvec3 x)", params: &["bvec3 x"] },
+            BuiltinOverload { label: "bool any(bvec4 x)", params: &["bvec4 x"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "all",
+        description: "### `all`\n*docs.gl / OpenGL 4.6*\n\nReturns `true` only if all components of a boolean vector are true.",
+        overloads: &[
+            BuiltinOverload { label: "bool all(bvec2 x)", params: &["bvec2 x"] },
+            BuiltinOverload { label: "bool all(bvec3 x)", params: &["bvec3 x"] },
+            BuiltinOverload { label: "bool all(bvec4 x)", params: &["bvec4 x"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "not",
+        description: "### `not`\n*docs.gl / OpenGL 4.6*\n\nPerforms a component-wise logical NOT operation on a boolean vector.",
+        overloads: &[
+            BuiltinOverload { label: "bvec2 not(bvec2 x)", params: &["bvec2 x"] },
+            BuiltinOverload { label: "bvec3 not(bvec3 x)", params: &["bvec3 x"] },
+            BuiltinOverload { label: "bvec4 not(bvec4 x)", params: &["bvec4 x"] },
+        ],
+    },
+
+    // ------------------------------------------------------------------------
+    // Common Math & Bitwise Functions
+    // ------------------------------------------------------------------------
+    BuiltinFunction {
+        name: "fma",
+        description: "### `fma`\n*docs.gl / OpenGL 4.6*\n\nPerforms fused multiply-add operation: $a \\cdot b + c$ with a single rounding step.",
+        overloads: &[
+            BuiltinOverload { label: "float fma(float a, float b, float c)", params: &["float a", "float b", "float c"] },
+            BuiltinOverload { label: "vec2 fma(vec2 a, vec2 b, vec2 c)", params: &["vec2 a", "vec2 b", "vec2 c"] },
+            BuiltinOverload { label: "vec3 fma(vec3 a, vec3 b, vec3 c)", params: &["vec3 a", "vec3 b", "vec3 c"] },
+            BuiltinOverload { label: "vec4 fma(vec4 a, vec4 b, vec4 c)", params: &["vec4 a", "vec4 b", "vec4 c"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "bitfieldExtract",
+        description: "### `bitfieldExtract`\n*docs.gl / OpenGL 4.6*\n\nExtracts a range of bits from an integer.",
+        overloads: &[
+            BuiltinOverload { label: "int bitfieldExtract(int value, int offset, int bits)", params: &["int value", "int offset", "int bits"] },
+            BuiltinOverload { label: "uint bitfieldExtract(uint value, int offset, int bits)", params: &["uint value", "int offset", "int bits"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "bitfieldInsert",
+        description: "### `bitfieldInsert`\n*docs.gl / OpenGL 4.6*\n\nInserts a range of bits into an integer.",
+        overloads: &[
+            BuiltinOverload { label: "int bitfieldInsert(int base, int insert, int offset, int bits)", params: &["int base", "int insert", "int offset", "int bits"] },
+            BuiltinOverload { label: "uint bitfieldInsert(uint base, uint insert, int offset, int bits)", params: &["uint base", "uint insert", "int offset", "int bits"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "bitfieldReverse",
+        description: "### `bitfieldReverse`\n*docs.gl / OpenGL 4.6*\n\nReverses the order of bits in an integer.",
+        overloads: &[
+            BuiltinOverload { label: "int bitfieldReverse(int value)", params: &["int value"] },
+            BuiltinOverload { label: "uint bitfieldReverse(uint value)", params: &["uint value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "bitCount",
+        description: "### `bitCount`\n*docs.gl / OpenGL 4.6*\n\nCounts the number of one-bits (population count) in an integer.",
+        overloads: &[
+            BuiltinOverload { label: "int bitCount(int value)", params: &["int value"] },
+            BuiltinOverload { label: "int bitCount(uint value)", params: &["uint value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "findLSB",
+        description: "### `findLSB`\n*docs.gl / OpenGL 4.6*\n\nFinds the index of the least significant set bit.",
+        overloads: &[
+            BuiltinOverload { label: "int findLSB(int value)", params: &["int value"] },
+            BuiltinOverload { label: "int findLSB(uint value)", params: &["uint value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "findMSB",
+        description: "### `findMSB`\n*docs.gl / OpenGL 4.6*\n\nFinds the index of the most significant set bit.",
+        overloads: &[
+            BuiltinOverload { label: "int findMSB(int value)", params: &["int value"] },
+            BuiltinOverload { label: "int findMSB(uint value)", params: &["uint value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "floatBitsToInt",
+        description: "### `floatBitsToInt`\n*docs.gl / OpenGL 4.6*\n\nReturns the IEEE 754 bit representation of a floating-point value as an integer.",
+        overloads: &[
+            BuiltinOverload { label: "int floatBitsToInt(float value)", params: &["float value"] },
+            BuiltinOverload { label: "ivec2 floatBitsToInt(vec2 value)", params: &["vec2 value"] },
+            BuiltinOverload { label: "ivec3 floatBitsToInt(vec3 value)", params: &["vec3 value"] },
+            BuiltinOverload { label: "ivec4 floatBitsToInt(vec4 value)", params: &["vec4 value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "floatBitsToUint",
+        description: "### `floatBitsToUint`\n*docs.gl / OpenGL 4.6*\n\nReturns the IEEE 754 bit representation of a floating-point value as an unsigned integer.",
+        overloads: &[
+            BuiltinOverload { label: "uint floatBitsToUint(float value)", params: &["float value"] },
+            BuiltinOverload { label: "uvec2 floatBitsToUint(vec2 value)", params: &["vec2 value"] },
+            BuiltinOverload { label: "uvec3 floatBitsToUint(vec3 value)", params: &["vec3 value"] },
+            BuiltinOverload { label: "uvec4 floatBitsToUint(vec4 value)", params: &["vec4 value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "intBitsToFloat",
+        description: "### `intBitsToFloat`\n*docs.gl / OpenGL 4.6*\n\nInterprets the bit pattern of an integer as an IEEE 754 floating-point value.",
+        overloads: &[
+            BuiltinOverload { label: "float intBitsToFloat(int value)", params: &["int value"] },
+            BuiltinOverload { label: "vec2 intBitsToFloat(ivec2 value)", params: &["vec2 value"] },
+            BuiltinOverload { label: "vec3 intBitsToFloat(ivec3 value)", params: &["vec3 value"] },
+            BuiltinOverload { label: "vec4 intBitsToFloat(ivec4 value)", params: &["vec4 value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "uintBitsToFloat",
+        description: "### `uintBitsToFloat`\n*docs.gl / OpenGL 4.6*\n\nInterprets the bit pattern of an unsigned integer as an IEEE 754 floating-point value.",
+        overloads: &[
+            BuiltinOverload { label: "float uintBitsToFloat(uint value)", params: &["uint value"] },
+            BuiltinOverload { label: "vec2 uintBitsToFloat(uvec2 value)", params: &["uvec2 value"] },
+            BuiltinOverload { label: "vec3 uintBitsToFloat(uvec3 value)", params: &["uvec3 value"] },
+            BuiltinOverload { label: "vec4 uintBitsToFloat(uvec4 value)", params: &["uvec4 value"] },
+        ],
+    },
+    BuiltinFunction {
+        name: "atomicAdd",
+        description: "### `atomicAdd`\n*docs.gl / OpenGL 4.6*\n\nPerforms an atomic addition on a shared variable or shader storage buffer object.",
+        overloads: &[
+            BuiltinOverload { label: "uint atomicAdd(inout uint mem, uint data)", params: &["inout uint mem", "uint data"] },
+            BuiltinOverload { label: "int atomicAdd(inout int mem, int data)", params: &["inout int mem", "int data"] },
+        ],
+    },
 ];
 
 pub fn lookup_builtin_function(name: &str) -> Option<&'static BuiltinFunction> {
