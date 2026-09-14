@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 >   You can download official ready-to-run binaries directly from GitHub Releases:
 >   [https://github.com/KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases)
 >   *(Download the archive for your OS, extract `glslangValidator` / `glslangValidator.exe`, and add its folder to your system `PATH`).*
-> 
+>  - **Ready Binaries:**  [https://github.com/KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases)
 > - **Windows Package Managers:**
 >   - **winget / Vulkan SDK:** `winget install KhronosGroup.VulkanSDK` (or via [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home))
 >   - **MSYS2 (UCRT64 / MINGW64):** `pacman -S mingw-w64-ucrt-x86_64-glslang`
