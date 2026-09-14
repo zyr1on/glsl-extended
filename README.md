@@ -37,38 +37,15 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 ## Features
 
-- **Dual Language Server Architecture:**
-  - **LSP 1 (`glsl_analyzer`):** High-speed autocompletion, hover documentation, and goto-definition.
-  - **LSP 2 (`glsl_validator`):** Compiler diagnostics, hybrid code formatting, color preview, and signature help.
-
-- **Signature Help & docs.gl Documentation (`signatureHelp`, `hover`):**
-  - Real-time parameter hints with active argument highlighting while typing inside function calls.
-  - Built-in OpenGL 4.6 documentation (`texture`, `normalize`, `mix`, `clamp`, `dot`, `cross`, etc.) with docs.gl summaries.
-  - Resolves user-defined functions across `#include` files using live editor buffer caching (zero disk I/O) and filesystem mtime caching.
-
-- **Recursive `#include` Function Autocompletion:**
-  - Autocomplete functions declared across directly and transitively included files (`common.glsl`, etc.).
-  - Intelligent context scanner suppresses autocomplete, signature help, and hover popups inside comments (`//`, `/* */`) and string literals.
-
-- **Dual Target API Validation (Desktop OpenGL & Vulkan):**
-  - **Desktop OpenGL (Default):** Validates pure Desktop OpenGL without mandatory SPIR-V layout restrictions across all versions (from `#version 330 core` through `#version 460 core`).
-  - **Vulkan (SPIR-V):** Strictly enforces SPIR-V layout locations (`layout(location = 0)`), descriptor sets, and push constants.
-  - **Dynamic Diagnostics Source:** Diagnostic messages dynamically match the shader version declared in the file (e.g. `glslangValidator (OpenGL 330 core)` vs `glslangValidator (Vulkan)`).
-  - **Zero-Restart Switching:** Toggle dynamically via `settings.json` or per-file inline directives.
-
-- **Smart Vector Swizzling & Generic Snippets:**
-  - Dimension-aware swizzle completions on vectors (`.xyzw`, `.rgba`, `.stpq`) and `.length()`.
-  - Generic boilerplate snippets (`ubo`, `ssbo`, `vert`, `frag`, `comp`, `geom`, `struct`, `func`, `main`).
-
-- **Hybrid Code Formatting (`textDocument/formatting`):**
-  - **Clang-Format Engine:** Uses system `clang-format` for AST-level formatting.
-  - **Built-in Pure-Rust Fallback:** Automatically activates if `clang-format` is not installed on the system.
-
-- **Interactive Color Swatches & Picker:**
-  - Inline color previews for `vec3(...)` and `vec4(...)` color literals with interactive color picker support.
-
-- **Tree-sitter Syntax Highlighting:**
-  - 400+ built-in GLSL types, mathematical/geometric functions, built-in variables (`gl_Position`, `gl_FragCoord`, etc.), and proper brace indentation matching.
+- **Dual Language Server Architecture:** `glsl_analyzer` (navigation/definition) and `glsl_validator` (diagnostics/formatting/signatures).
+- **Signature Help & docs.gl Hover:** Real-time parameter hints and built-in OpenGL 4.6 documentation summaries.
+- **Recursive `#include` Autocompletion:** Suggests functions across all included files; automatically suppressed in comments and strings.
+- **Dual Target API Validation:** Validates Desktop OpenGL (`#version 330 core` to `460 core`) and Vulkan SPIR-V with dynamic version labels.
+- **Smart Vector Swizzling:** Context-aware `.xyzw`, `.rgba`, and `.stpq` swizzle completions on vectors.
+- **GLSL Boilerplate Snippets:** Generic templates for `ubo`, `ssbo`, shaders, structs, and functions.
+- **Hybrid Code Formatting:** AST-level `clang-format` engine with automatic built-in pure-Rust fallback.
+- **Interactive Color Swatches & Picker:** Inline visual color previews and interactive picker for `vec3` and `vec4`.
+- **Tree-sitter Syntax Highlighting:** Highlighting for 400+ types, built-in variables, and proper brace indentation.
 
 ---
 
