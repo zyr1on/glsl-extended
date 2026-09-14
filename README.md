@@ -75,9 +75,6 @@ To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux
   },
   "lsp": {
     "glsl_validator": {
-      "binary": {
-        "path": ""
-      },
       "initialization_options": {
         "target_api": "opengl",
         "formatter": "clang-format",
@@ -87,9 +84,6 @@ To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux
       }
     },
     "glsl_analyzer": {
-      "binary": {
-        "path": ""
-      },
       "initialization_options": {
         "glsl_analyzer_path": ""
       }
@@ -108,8 +102,8 @@ To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux
 | `target_api` | `"opengl"` *(default)* / `"vulkan"` | `"opengl"` (Desktop OpenGL, respects `#version` 330–460) or `"vulkan"` (strict SPIR-V). |
 | `formatter` | `"clang-format"` *(default)* / `"builtin"` | `"clang-format"` (AST-level, auto-fallback) or `"builtin"` (pure-Rust). |
 | `glslang_validator_path` | `""` *(optional)* | Custom executable path to `glslang` or `glslangValidator`. Leave empty/null for auto-discovery and automatic Khronos download. |
-| `glsl_validator_path` | `""` *(optional)* | Custom executable path to `glsl_validator` (or configure via `lsp.glsl_validator.binary.path`). Leave empty/null for auto-discovery. |
-| `glsl_analyzer_path` | `""` *(optional)* | Custom executable path to `glsl_analyzer` (or configure via `lsp.glsl_analyzer.binary.path`). Leave empty/null for auto-discovery. |
+| `glsl_validator_path` | `""` *(optional)* | Custom executable path to `glsl_validator`. Leave empty/null for auto-discovery. |
+| `glsl_analyzer_path` | `""` *(optional)* | Custom executable path to `glsl_analyzer`. Leave empty/null for auto-discovery. |
 | `clang_format_path` | `""` *(optional)* | Custom executable path to `clang-format`. Leave empty/null for auto-discovery. |
 
 

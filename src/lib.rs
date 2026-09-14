@@ -58,23 +58,25 @@ impl GlslExtendedExtension {
     ) -> Result<String> {
         // 0) User explicit configuration in Zed settings.json
         if let Ok(settings) = LspSettings::for_worktree(language_server_id.as_ref(), worktree) {
-            let configured = settings
-                .binary
-                .and_then(|b| b.path)
-                .filter(|p| !p.trim().is_empty())
-                .or_else(|| {
-                    let keys = ["glsl_analyzer_path", "analyzer_path", "path"];
-                    settings
-                        .initialization_options
-                        .as_ref()
-                        .and_then(|opts| extract_path_from_json(opts, &keys))
-                        .or_else(|| {
-                            settings
-                                .settings
-                                .as_ref()
-                                .and_then(|s| extract_path_from_json(s, &keys))
-                        })
-                });
+            let configured = {
+                let keys = ["glsl_analyzer_path", "analyzer_path", "path"];
+                settings
+                    .initialization_options
+                    .as_ref()
+                    .and_then(|opts| extract_path_from_json(opts, &keys))
+                    .or_else(|| {
+                        settings
+                            .settings
+                            .as_ref()
+                            .and_then(|s| extract_path_from_json(s, &keys))
+                    })
+                    .or_else(|| {
+                        settings
+                            .binary
+                            .and_then(|b| b.path)
+                            .filter(|p| !p.trim().is_empty())
+                    })
+            };
 
             if let Some(path) = resolve_configured_path(configured, worktree) {
                 return Ok(path);
@@ -177,23 +179,25 @@ impl GlslExtendedExtension {
     ) -> Result<String> {
         // 0) User explicit configuration in Zed settings.json
         if let Ok(settings) = LspSettings::for_worktree(language_server_id.as_ref(), worktree) {
-            let configured = settings
-                .binary
-                .and_then(|b| b.path)
-                .filter(|p| !p.trim().is_empty())
-                .or_else(|| {
-                    let keys = ["glsl_validator_path", "validator_path", "path"];
-                    settings
-                        .initialization_options
-                        .as_ref()
-                        .and_then(|opts| extract_path_from_json(opts, &keys))
-                        .or_else(|| {
-                            settings
-                                .settings
-                                .as_ref()
-                                .and_then(|s| extract_path_from_json(s, &keys))
-                        })
-                });
+            let configured = {
+                let keys = ["glsl_validator_path", "validator_path", "path"];
+                settings
+                    .initialization_options
+                    .as_ref()
+                    .and_then(|opts| extract_path_from_json(opts, &keys))
+                    .or_else(|| {
+                        settings
+                            .settings
+                            .as_ref()
+                            .and_then(|s| extract_path_from_json(s, &keys))
+                    })
+                    .or_else(|| {
+                        settings
+                            .binary
+                            .and_then(|b| b.path)
+                            .filter(|p| !p.trim().is_empty())
+                    })
+            };
 
             if let Some(path) = resolve_configured_path(configured, worktree) {
                 return Ok(path);
