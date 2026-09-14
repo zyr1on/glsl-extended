@@ -1,4 +1,4 @@
-﻿# GLSL Extended for Zed
+# GLSL Extended for Zed
 
 Comprehensive GLSL and shader development extension for the Zed Editor, featuring full support for Desktop OpenGL (from `#version 330 core` through `#version 460 core`) and Vulkan (SPIR-V) validation, AST-based formatting, smart vector swizzling, recursive `#include` autocompletion, signature help with docs.gl, and Tree-sitter syntax highlighting.
 
@@ -22,7 +22,8 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 >   *(Download the archive for your OS, extract `glslangValidator` / `glslangValidator.exe`, and add its folder to your system `PATH`).*
 > 
 > - **Windows Package Managers:**
->   `winget install KhronosGroup.VulkanSDK` (or via [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home))
+>   - **winget / Vulkan SDK:** `winget install KhronosGroup.VulkanSDK` (or via [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home))
+>   - **MSYS2 (UCRT64 / MINGW64):** `pacman -S mingw-w64-ucrt-x86_64-glslang`
 > 
 > - **Linux Package Managers:**
 >   - Ubuntu / Debian: `sudo apt install glslang-tools`
