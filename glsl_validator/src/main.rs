@@ -2072,7 +2072,8 @@ fn main() -> io::Result<()> {
                                     "triggerCharacters": ["."]
                                 },
                                 "signatureHelpProvider": {
-                                    "triggerCharacters": ["(", ","]
+                                    "triggerCharacters": ["(", ","],
+                                    "retriggerCharacters": [","]
                                 },
                                 "hoverProvider": true,
                                 "definitionProvider": true,

@@ -1130,7 +1130,10 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
     // 1. Fast lookup: Check built-in functions (docs.gl) - takes microseconds, 0 disk I/O
     if let Some(builtin) = docs::lookup_builtin_function(&fn_name) {
         let mut signatures = Vec::with_capacity(builtin.overloads.len());
-        let mut active_sig = 0;
+        let mut best_matching_sig = None;
+        let mut best_diff = usize::MAX;
+        let mut max_params = 0;
+        let mut max_params_sig = 0;
 
         for (idx, overload) in builtin.overloads.iter().enumerate() {
             let params_json: Vec<Value> = overload
@@ -1148,16 +1151,34 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
                 "parameters": params_json
             }));
 
+            let p_count = overload.params.len();
+            if p_count > max_params {
+                max_params = p_count;
+                max_params_sig = idx;
+            }
+
             // Pick overload matching argument count if possible
-            if active_param < overload.params.len() {
-                active_sig = idx;
+            if active_param < p_count {
+                let diff = p_count - active_param;
+                if diff < best_diff {
+                    best_diff = diff;
+                    best_matching_sig = Some(idx);
+                }
             }
         }
+
+        let active_sig = best_matching_sig.unwrap_or(max_params_sig);
+        let sig_param_len = builtin.overloads.get(active_sig).map(|o| o.params.len()).unwrap_or(0);
+        let active_param_clamped = if sig_param_len > 0 {
+            active_param.min(sig_param_len - 1)
+        } else {
+            0
+        };
 
         return json!({
             "signatures": signatures,
             "activeSignature": active_sig,
-            "activeParameter": active_param
+            "activeParameter": active_param_clamped
         });
     }
 
@@ -1168,8 +1189,10 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
 
     if !matched_funcs.is_empty() {
         let mut signatures = Vec::with_capacity(matched_funcs.len());
-        let mut active_sig = 0;
+        let mut best_matching_sig = None;
         let mut best_diff = usize::MAX;
+        let mut max_params = 0;
+        let mut max_params_sig = 0;
 
         for (idx, func) in matched_funcs.iter().enumerate() {
             let params_json: Vec<Value> = func
@@ -1194,19 +1217,33 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
                 "parameters": params_json
             }));
 
-            if active_param < func.parameters.len() {
-                let diff = func.parameters.len() - active_param;
+            let p_count = func.parameters.len();
+            if p_count > max_params {
+                max_params = p_count;
+                max_params_sig = idx;
+            }
+
+            if active_param < p_count {
+                let diff = p_count - active_param;
                 if diff < best_diff {
                     best_diff = diff;
-                    active_sig = idx;
+                    best_matching_sig = Some(idx);
                 }
             }
         }
 
+        let active_sig = best_matching_sig.unwrap_or(max_params_sig);
+        let sig_param_len = matched_funcs.get(active_sig).map(|f| f.parameters.len()).unwrap_or(0);
+        let active_param_clamped = if sig_param_len > 0 {
+            active_param.min(sig_param_len - 1)
+        } else {
+            0
+        };
+
         return json!({
             "signatures": signatures,
             "activeSignature": active_sig,
-            "activeParameter": active_param
+            "activeParameter": active_param_clamped
         });
     }
 
@@ -1718,5 +1755,90 @@ void main() {
         let def_res = handle_definition(&def_req, &doc_cache);
         assert_eq!(def_res["uri"], uri);
         assert_eq!(def_res["range"]["start"]["line"], 0);
+    }
+
+    #[test]
+    fn test_overloaded_signature_help_and_trailing_comma() {
+        let mut doc_cache = HashMap::new();
+        let uri = "file:///shader.vert";
+        let code = r#"
+float sin_wave(float x) {
+    return sin(x);
+}
+
+float sin_wave(float x, float time) {
+    return sin(x + time);
+}
+
+void main() {
+    vec2 pos = vec2(0.0);
+    pos.y = sin_wave(pos.x,TIME);
+}
+"#;
+        doc_cache.insert(uri.to_string(), code.to_string());
+
+        // 1. Cursor right on TIME (col 27 on line 11): should pick 2-parameter overload
+        let req1 = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 11, "character": 27 }
+            }
+        });
+        let res1 = handle_signature_help(&req1, &doc_cache);
+        assert!(!res1.is_null());
+        assert_eq!(res1["activeSignature"], 1);
+        assert_eq!(res1["activeParameter"], 1);
+
+        // 2. User types a comma next to TIME: "pos.y = sin_wave(pos.x,TIME,);"
+        let code_comma = r#"
+float sin_wave(float x) {
+    return sin(x);
+}
+
+float sin_wave(float x, float time) {
+    return sin(x + time);
+}
+
+void main() {
+    vec2 pos = vec2(0.0);
+    pos.y = sin_wave(pos.x,TIME,);
+}
+"#;
+        doc_cache.insert(uri.to_string(), code_comma.to_string());
+        let req2 = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 11, "character": 32 } // after the comma
+            }
+        });
+        let res2 = handle_signature_help(&req2, &doc_cache);
+        assert!(!res2.is_null());
+        // Must NOT fall back to 1-param overload (index 0), must pick the 2-param overload (index 1)
+        assert_eq!(res2["activeSignature"], 1);
+        // activeParameter must be clamped to 1 so Zed doesn't dismiss the popup!
+        assert_eq!(res2["activeParameter"], 1);
+
+        // 3. If a 3-param overload is present, active_param=2 should select it!
+        let code_3params = r#"
+float sin_wave(float x) { return sin(x); }
+float sin_wave(float x, float time) { return sin(x + time); }
+float sin_wave(float x, float time, float speed) { return sin(x + time * speed); }
+
+void main() {
+    vec2 pos = vec2(0.0);
+    pos.y = sin_wave(pos.x,TIME, );
+}
+"#;
+        doc_cache.insert(uri.to_string(), code_3params.to_string());
+        let req3 = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 7, "character": 33 }
+            }
+        });
+        let res3 = handle_signature_help(&req3, &doc_cache);
+        assert!(!res3.is_null());
+        assert_eq!(res3["activeSignature"], 2);
+        assert_eq!(res3["activeParameter"], 2);
     }
 }

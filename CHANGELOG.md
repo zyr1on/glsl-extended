@@ -2,6 +2,15 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.15] - 2026-09-14
+
+### Fixed
+- **Signature Help Active Parameter Clamping:** Clamped `activeParameter` to `parameters.len() - 1` when the argument count exceeds known parameters (such as typing a trailing comma: `sin_wave(pos.x, TIME, )`). This prevents LSP editors like Zed from prematurely dismissing the signature help popup.
+- **Overload Selection on Trailing Arguments:** When argument counts exceed the shortest overload, the server now selects the longest matching overload instead of resetting to the first overload (`index 0`).
+- **Retrigger Characters Registration:** Added `retriggerCharacters: [","]` to `signatureHelpProvider` capability in server initialization, ensuring editors refresh signature help seamlessly on comma keystrokes.
+
+---
+
 ## [0.1.14] - 2026-09-14
 
 ### Added
