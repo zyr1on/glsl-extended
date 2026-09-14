@@ -12,26 +12,31 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 ---
 
-> [!IMPORTANT]
-> ### Required External Dependency: `glslangValidator`
-> Real-time compile diagnostics, error squiggles, and linting require **`glslangValidator`** (the official Khronos Group GLSL reference compiler) to be installed on your system.
+> [!TIP]
+> ### Automatic Installation (Zero Setup)
+> **Everything is automatic!** GLSL Extended automatically resolves, downloads, and configures the required binaries from official GitHub releases when you open a shader:
+> - **`glsl_validator`**: Automatically downloaded from [zed-glsl-extended/releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> - **`glslang` / `glslangValidator`**: Automatically downloaded from official [KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases) if not already installed in your system `PATH` or Vulkan SDK.
+> - **`glsl_analyzer`**: (Optional external Zig LSP) Automatically downloaded from [nolanderc/glsl_analyzer/releases](https://github.com/nolanderc/glsl_analyzer/releases) if chosen in settings.
+
+> [!NOTE]
+> ### Manual Installation (Optional / Offline Environments)
+> If you prefer using your own system compiler, or work in an offline / air-gapped environment, GLSL Extended will seamlessly prioritize your local binaries from `PATH`:
 > 
-> - **Pre-built Standalone Binaries (All Platforms):**
->   You can download official ready-to-run binaries directly from GitHub Releases:
->   [https://github.com/KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases)
->   *(Download the archive for your OS, extract `glslangValidator` / `glslangValidator.exe`, and add its folder to your system `PATH`).*
->  - **Ready Binaries:**  [https://github.com/KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases)
-> - **Windows Package Managers:**
+> - **Windows:**
 >   - **winget / Vulkan SDK:** `winget install KhronosGroup.VulkanSDK` (or via [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home))
 >   - **MSYS2 (UCRT64 / MINGW64):** `pacman -S mingw-w64-ucrt-x86_64-glslang`
+>   - **Pre-built Binaries:** Download zip from [KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases) and add `bin/` to `PATH`.
 > 
-> - **Linux Package Managers:**
->   - Ubuntu / Debian: `sudo apt install glslang-tools`
->   - Arch Linux: `sudo pacman -S glslang`
->   - Fedora: `sudo dnf install glslang`
+> - **Linux:**
+>   - **Ubuntu / Debian:** `sudo apt install glslang-tools`
+>   - **Arch Linux:** `sudo pacman -S glslang`
+>   - **Fedora:** `sudo dnf install glslang`
+>   - **Pre-built Tarball:** Download from [KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases).
 > 
-> - **macOS (Homebrew):**
->   `brew install glslang`
+> - **macOS:**
+>   - **Homebrew:** `brew install glslang`
+>   - **Pre-built Universal Binary:** Download from [KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases).
 
 ---
 

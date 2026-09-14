@@ -2,6 +2,15 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.17] - 2026-09-14
+
+### Added
+- **Automatic `glslang` Download & Resolution:** Zero-configuration setup out of the box. If `glslang` or `glslangValidator` is not found on the user's system `PATH` or Vulkan SDK, the extension automatically queries KhronosGroup/glslang official GitHub releases, downloads the matching release package for Windows, Linux, or macOS, and seamlessly wires it to the language server.
+- **Local Sibling Directory Scanner:** `glsl_validator` now automatically inspects parent and sibling directories for extension-managed `glslang-*` installations, guaranteeing robust reference compiler discovery even without manual environment variables.
+- **Comprehensive Dependency Documentation:** Updated `README.md` with full details on zero-setup automatic downloading as well as manual package manager instructions across Windows (winget, MSYS2), Linux (apt, pacman, dnf), and macOS (Homebrew).
+
+---
+
 ## [0.1.16] - 2026-09-14
 
 ### Performance

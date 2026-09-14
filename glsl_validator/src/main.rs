@@ -154,6 +154,40 @@ fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
         }
     }
 
+    // 4. Check relative sibling directories (extracted by Zed extension)
+    if let Ok(exe_path) = std::env::current_exe() {
+        let search_dirs = [
+            exe_path.parent(),
+            exe_path.parent().and_then(|p| p.parent()),
+        ];
+        for dir in search_dirs.into_iter().flatten() {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir()
+                        && path
+                            .file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with("glslang-"))
+                    {
+                        let bin_dir = path.join("bin");
+                        let exe_ext = if cfg!(windows) { ".exe" } else { "" };
+                        let candidates = [
+                            bin_dir.join(format!("glslangValidator{exe_ext}")),
+                            bin_dir.join(format!("glslang{exe_ext}")),
+                            path.join(format!("glslangValidator{exe_ext}")),
+                            path.join(format!("glslang{exe_ext}")),
+                        ];
+                        for cand in candidates {
+                            if cand.is_file() {
+                                return Some(cand.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 4. Platform-specific fallback search paths
     #[cfg(windows)]
     {

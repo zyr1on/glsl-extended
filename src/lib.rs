@@ -15,6 +15,7 @@ use zed_extension_api::{self as zed, LanguageServerId, Result, serde_json};
 struct GlslExtendedExtension {
     cached_glsl_analyzer: Option<String>,
     cached_glsl_validator: Option<String>,
+    cached_glslang: Option<String>,
 }
 
 impl GlslExtendedExtension {
@@ -223,6 +224,175 @@ impl GlslExtendedExtension {
 
         Err("glsl_validator binary not found. Please add 'glsl_validator' to your PATH or install it via 'cargo install --path glsl_validator'.".to_string())
     }
+
+    /// Locates or downloads the glslang / glslangValidator reference compiler from KhronosGroup.
+    fn find_glslang(
+        &mut self,
+        language_server_id: &LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> Result<String> {
+        // 1) Check PATH (Windows, Linux, macOS) for either glslangValidator or glslang
+        if let Some(path) = worktree.which("glslangValidator").or_else(|| worktree.which("glslang")) {
+            return Ok(path);
+        }
+
+        // 2) Check cached binary
+        if let Some(path) = &self.cached_glslang
+            && fs::metadata(path).is_ok_and(|s| s.is_file())
+        {
+            return Ok(path.clone());
+        }
+
+        let (platform, arch) = zed::current_platform();
+        let exe = if matches!(platform, zed::Os::Windows) {
+            ".exe"
+        } else {
+            ""
+        };
+
+        // 3) Check VULKAN_SDK environment variable if present
+        if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
+            let candidate1 = format!("{vk_sdk}/bin/glslangValidator{exe}");
+            let candidate2 = format!("{vk_sdk}/bin/glslang{exe}");
+            if fs::metadata(&candidate1).is_ok_and(|s| s.is_file()) {
+                self.cached_glslang = Some(candidate1.clone());
+                return Ok(candidate1);
+            }
+            if fs::metadata(&candidate2).is_ok_and(|s| s.is_file()) {
+                self.cached_glslang = Some(candidate2.clone());
+                return Ok(candidate2);
+            }
+        }
+
+        // 4) Common fallback locations per platform
+        let fallbacks: &[&str] = match platform {
+            zed::Os::Windows => &[
+                "C:\\msys64\\ucrt64\\bin\\glslangValidator.exe",
+                "C:\\msys64\\ucrt64\\bin\\glslang.exe",
+                "C:\\msys64\\mingw64\\bin\\glslangValidator.exe",
+                "C:\\msys64\\mingw64\\bin\\glslang.exe",
+                "C:\\msys64\\clang64\\bin\\glslangValidator.exe",
+                "C:\\msys64\\clang64\\bin\\glslang.exe",
+                "C:\\Program Files\\glslang\\bin\\glslangValidator.exe",
+                "C:\\Program Files\\glslang\\bin\\glslang.exe",
+            ],
+            zed::Os::Linux | zed::Os::Mac => &[
+                "/usr/local/bin/glslangValidator",
+                "/usr/local/bin/glslang",
+                "/usr/bin/glslangValidator",
+                "/usr/bin/glslang",
+                "/opt/homebrew/bin/glslangValidator",
+                "/opt/homebrew/bin/glslang",
+            ],
+        };
+        for fallback in fallbacks {
+            if fs::metadata(fallback).is_ok_and(|s| s.is_file()) {
+                self.cached_glslang = Some(fallback.to_string());
+                return Ok(fallback.to_string());
+            }
+        }
+
+        // 5) Download official release from KhronosGroup/glslang GitHub Releases
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+        );
+
+        let release = zed::latest_github_release(
+            "KhronosGroup/glslang",
+            zed::GithubReleaseOptions {
+                require_assets: true,
+                pre_release: false,
+            },
+        )?;
+
+        let asset = release
+            .assets
+            .iter()
+            .find(|a| {
+                let name = &a.name;
+                // Exclude debug packages (80-250MB) and prioritize compact release builds (7-13MB)
+                if !name.contains("release") {
+                    return false;
+                }
+                match (platform, arch) {
+                    (zed::Os::Windows, zed::Architecture::X8664 | zed::Architecture::X86) => {
+                        name.contains("windows-x86_64")
+                    }
+                    (zed::Os::Windows, zed::Architecture::Aarch64) => {
+                        name.contains("windows-arm64") || name.contains("windows-x86_64")
+                    }
+                    (zed::Os::Linux, zed::Architecture::X8664) => {
+                        name.contains("linux-x86_64")
+                    }
+                    (zed::Os::Linux, zed::Architecture::Aarch64) => {
+                        name.contains("linux-arm64") || name.contains("linux-aarch64") || name.contains("linux-x86_64")
+                    }
+                    (zed::Os::Mac, _) => {
+                        name.contains("macos-universal") || name.contains("macos")
+                    }
+                    _ => false,
+                }
+            })
+            .ok_or_else(|| {
+                format!(
+                    "Compatible glslang release asset not found for {platform:?}-{arch:?} in KhronosGroup/glslang release {}",
+                    release.version
+                )
+            })?;
+
+        let version_dir = format!("glslang-{}", release.version);
+        let candidate_bin_validator = format!("{version_dir}/bin/glslangValidator{exe}");
+        let candidate_bin_glslang = format!("{version_dir}/bin/glslang{exe}");
+        let candidate_root_validator = format!("{version_dir}/glslangValidator{exe}");
+        let candidate_root_glslang = format!("{version_dir}/glslang{exe}");
+
+        if !fs::metadata(&candidate_bin_validator).is_ok_and(|s| s.is_file())
+            && !fs::metadata(&candidate_bin_glslang).is_ok_and(|s| s.is_file())
+            && !fs::metadata(&candidate_root_validator).is_ok_and(|s| s.is_file())
+            && !fs::metadata(&candidate_root_glslang).is_ok_and(|s| s.is_file())
+        {
+            zed::set_language_server_installation_status(
+                language_server_id,
+                &zed::LanguageServerInstallationStatus::Downloading,
+            );
+
+            let file_type = if asset.name.ends_with(".zip") {
+                zed::DownloadedFileType::Zip
+            } else if asset.name.ends_with(".tar.gz") || asset.name.ends_with(".tgz") {
+                zed::DownloadedFileType::GzipTar
+            } else {
+                zed::DownloadedFileType::Zip
+            };
+
+            zed::download_file(&asset.download_url, &version_dir, file_type)
+                .map_err(|e| format!("Failed to download glslang from KhronosGroup: {e}"))?;
+        }
+
+        let binary_path = if fs::metadata(&candidate_bin_validator).is_ok_and(|s| s.is_file()) {
+            candidate_bin_validator
+        } else if fs::metadata(&candidate_bin_glslang).is_ok_and(|s| s.is_file()) {
+            candidate_bin_glslang
+        } else if fs::metadata(&candidate_root_validator).is_ok_and(|s| s.is_file()) {
+            candidate_root_validator
+        } else if fs::metadata(&candidate_root_glslang).is_ok_and(|s| s.is_file()) {
+            candidate_root_glslang
+        } else {
+            return Err(format!(
+                "glslang executable not found in '{version_dir}/bin' or root of archive"
+            ));
+        };
+
+        let _ = zed::make_file_executable(&binary_path);
+
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::None,
+        );
+
+        self.cached_glslang = Some(binary_path.clone());
+        Ok(binary_path)
+    }
 }
 
 impl zed::Extension for GlslExtendedExtension {
@@ -230,6 +400,7 @@ impl zed::Extension for GlslExtendedExtension {
         Self {
             cached_glsl_analyzer: None,
             cached_glsl_validator: None,
+            cached_glslang: None,
         }
     }
 
@@ -244,11 +415,18 @@ impl zed::Extension for GlslExtendedExtension {
                 args: vec![],
                 env: Default::default(),
             }),
-            "glsl_validator" => Ok(zed::Command {
-                command: self.find_glsl_validator(language_server_id, worktree)?,
-                args: vec![],
-                env: Default::default(),
-            }),
+            "glsl_validator" => {
+                let validator = self.find_glsl_validator(language_server_id, worktree)?;
+                let mut env = Vec::new();
+                if let Ok(glslang) = self.find_glslang(language_server_id, worktree) {
+                    env.push(("GLSLANG_VALIDATOR_PATH".to_string(), glslang));
+                }
+                Ok(zed::Command {
+                    command: validator,
+                    args: vec![],
+                    env,
+                })
+            }
             unknown => Err(format!("Unknown language server: {unknown}")),
         }
     }
@@ -260,6 +438,18 @@ impl zed::Extension for GlslExtendedExtension {
     ) -> Result<Option<serde_json::Value>> {
         let server_name = language_server_id.as_ref();
         let settings = LspSettings::for_worktree(server_name, worktree)?;
+
+        if server_name == "glsl_validator" {
+            let mut opts = settings.initialization_options.unwrap_or_else(|| serde_json::json!({}));
+            if let Ok(glslang) = self.find_glslang(language_server_id, worktree)
+                && opts.get("glslang_validator_path").is_none()
+                && opts.get("glslang_path").is_none()
+            {
+                opts["glslang_validator_path"] = serde_json::Value::String(glslang);
+            }
+            return Ok(Some(opts));
+        }
+
         if let Some(opts) = settings.initialization_options {
             return Ok(Some(opts));
         }
