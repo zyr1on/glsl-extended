@@ -1,6 +1,6 @@
 [package]
 name = "glsl_validator"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 description = "Lightweight GLSL Language Server wrapper around glslangValidator for OpenGL 4.6"
