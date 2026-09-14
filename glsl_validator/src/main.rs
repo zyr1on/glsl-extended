@@ -1022,6 +1022,12 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
             "Generic Uniform Buffer Object (UBO) declaration",
         ),
         (
+            "ubo-vk",
+            "Uniform Buffer Object (Vulkan)",
+            "layout(set = ${1:0}, binding = ${2:0}) uniform ${3:BlockName} {\n\t$0\n} ${4:ubo};",
+            "Vulkan Uniform Buffer Object with set and binding",
+        ),
+        (
             "ssbo",
             "Shader Storage Buffer Object (Generic)",
             "layout(std430, binding = ${1:0}) buffer ${2:BlockName} {\n\t$0\n};",
@@ -1029,15 +1035,27 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
         ),
         (
             "vert",
-            "Vertex Shader Skeleton",
+            "Vertex Shader Skeleton (OpenGL)",
             "#version 460 core\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
-            "Clean GLSL Vertex Shader template",
+            "Clean OpenGL GLSL Vertex Shader template",
+        ),
+        (
+            "vert-vk",
+            "Vertex Shader Skeleton (Vulkan)",
+            "#version 460\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
+            "Clean Vulkan GLSL Vertex Shader template",
         ),
         (
             "frag",
-            "Fragment Shader Skeleton",
+            "Fragment Shader Skeleton (OpenGL)",
             "#version 460 core\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
-            "Clean GLSL Fragment Shader template",
+            "Clean OpenGL GLSL Fragment Shader template",
+        ),
+        (
+            "frag-vk",
+            "Fragment Shader Skeleton (Vulkan)",
+            "#version 460\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
+            "Clean Vulkan GLSL Fragment Shader template",
         ),
         (
             "comp",
@@ -2555,9 +2573,10 @@ mod tests {
     #[test]
     fn test_generate_snippet_completions() {
         let ubo_snips = generate_snippet_completions("ubo");
-        assert_eq!(ubo_snips.len(), 1);
-        assert_eq!(ubo_snips[0]["label"], "ubo");
-        assert!(ubo_snips[0]["insertText"]
+        assert!(ubo_snips.iter().any(|s| s["label"] == "ubo"));
+        assert!(ubo_snips.iter().any(|s| s["label"] == "ubo-vk"));
+        let ubo_item = ubo_snips.iter().find(|s| s["label"] == "ubo").unwrap();
+        assert!(ubo_item["insertText"]
             .as_str()
             .unwrap()
             .contains("layout(std140, binding = ${1:0}) uniform ${2:BlockName}"));
@@ -2567,14 +2586,21 @@ mod tests {
         assert_eq!(ssbo_snips[0]["label"], "ssbo");
 
         let vert_snips = generate_snippet_completions("vert");
-        assert_eq!(vert_snips.len(), 1);
-        assert!(vert_snips[0]["insertText"]
+        assert!(vert_snips.iter().any(|s| s["label"] == "vert"));
+        assert!(vert_snips.iter().any(|s| s["label"] == "vert-vk"));
+        let vert_gl = vert_snips.iter().find(|s| s["label"] == "vert").unwrap();
+        assert!(vert_gl["insertText"]
             .as_str()
             .unwrap()
             .contains("#version 460 core"));
+        let vert_vk = vert_snips.iter().find(|s| s["label"] == "vert-vk").unwrap();
+        assert!(vert_vk["insertText"]
+            .as_str()
+            .unwrap()
+            .contains("#version 460\n"));
 
         let all_snips = generate_snippet_completions("");
-        assert!(all_snips.len() >= 8);
+        assert!(all_snips.len() >= 11);
     }
 
     #[test]

@@ -8,6 +8,15 @@
     ],
     "description": "Generic Uniform Buffer Object (UBO)"
   },
+  "Uniform Buffer Object (Vulkan)": {
+    "prefix": "ubo-vk",
+    "body": [
+      "layout(set = ${1:0}, binding = ${2:0}) uniform ${3:BlockName} {",
+      "\t$0",
+      "} ${4:ubo};"
+    ],
+    "description": "Vulkan Uniform Buffer Object with set and binding"
+  },
   "Shader Storage Buffer Object": {
     "prefix": "ssbo",
     "body": [
@@ -16,6 +25,32 @@
       "};"
     ],
     "description": "Generic Shader Storage Buffer Object (SSBO)"
+  },
+  "Vertex Shader (Vulkan)": {
+    "prefix": "vert-vk",
+    "body": [
+      "#version 460",
+      "",
+      "layout(location = 0) in vec3 inPosition;",
+      "",
+      "void main() {",
+      "\tgl_Position = vec4(inPosition, 1.0);",
+      "}"
+    ],
+    "description": "Clean Vulkan GLSL Vertex Shader boilerplate"
+  },
+  "Fragment Shader (Vulkan)": {
+    "prefix": "frag-vk",
+    "body": [
+      "#version 460",
+      "",
+      "layout(location = 0) out vec4 fragColor;",
+      "",
+      "void main() {",
+      "\tfragColor = vec4(1.0);",
+      "}"
+    ],
+    "description": "Clean Vulkan GLSL Fragment Shader boilerplate"
   },
   "Vertex Shader": {
     "prefix": "vert",
