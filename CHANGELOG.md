@@ -5,7 +5,11 @@ All notable changes to the GLSL Extended extension for Zed are documented in thi
 ## [0.1.19] - 2026-09-14
 
 ### Added
-- **Complete Native GLSL Types Suite:** Autocomplete now natively suggests all GLSL 4.6 & Vulkan types:
+- **Unified LSP Orchestrator (`AnalyzerBridge`):** `glsl_validator` acts as the master orchestrator uniting both `glslangValidator` (for compilation diagnostics) and `glsl_analyzer` (for AST completions, Khronos GLSL extensions, `#include` resolution, hover documentation, and goto definition).
+- **Smart Function Completion with Tab `()`:** Automatically decorates function items with `($1)$0` snippets (`insertTextFormat: 2`), placing parentheses and cursor inside upon Tab.
+- **Dynamic Vector Swizzle Completions:** Injects vector swizzle completions (`.x`, `.xy`, `.xyz`, `.xyzw`, `.rgba`, `.stpq`) when accessing vector members via `.`, dynamically filtered by vector dimension and prefix.
+- **Zero Dual-LSP Conflicts:** Fixed duplicate popup suggestions (such as `testColor` appearing twice) by routing all editor interactions through `glsl_validator` as the single registered GLSL language server.
+- **Complete Native GLSL Types Suite:** Autocomplete natively suggests all GLSL 4.6 & Vulkan types as a reliable offline fallback:
   - Scalar types: `float`, `double`, `int`, `uint`, `bool`, `void`.
   - Floating, double, integer, unsigned, and boolean vectors: `vec2..vec4`, `dvec2..dvec4`, `ivec2..ivec4`, `uvec2..uvec4`, `bvec2..bvec4`.
   - Matrices: `mat2..mat4`, all non-square matrix types (`mat2x3`, `mat4x3`, etc.), and double matrices (`dmat2..dmat4x4`).
@@ -16,7 +20,6 @@ All notable changes to the GLSL Extended extension for Zed are documented in thi
 - **GLSL Builtin Variables:** Builtin variable suggestions across pipeline stages (`gl_Position`, `gl_PointSize`, `gl_FragCoord`, `gl_FragDepth`, `gl_VertexIndex`, `gl_InstanceIndex`, `gl_GlobalInvocationID`, etc.).
 - **Preprocessor Directives:** Suggestions for `#version`, `#include`, `#define`, `#undef`, `#if`, `#ifdef`, `#extension`, `#pragma`, etc.
 - **Strict Single-Pass Deduplication:** Guaranteed zero duplicate labels across any autocompletion query.
-- **glsl_analyzer Registered as Optional Server:** Re-registered `glsl_analyzer` in `extension.toml` as an available server option without default dual-launch conflict, giving users complete configuration choice.
 
 ---
 
