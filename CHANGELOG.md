@@ -2,6 +2,18 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.18] - 2026-09-14
+
+### Added
+- **Explicit Binary Path Configuration:** Users can now specify custom executable paths in Zed `settings.json` for all binaries:
+  - `glslang_validator_path` / `glslang_path`: Direct path to `glslang` or `glslangValidator`.
+  - `glsl_validator_path`: Direct path to `glsl_validator` binary (or via `lsp.glsl_validator.binary.path`).
+  - `glsl_analyzer_path`: Direct path to `glsl_analyzer` binary (or via `lsp.glsl_analyzer.binary.path`).
+- **Graceful Null & Empty Path Fallback:** When custom path settings are empty (`""`), whitespace-only, or `null`, the extension automatically ignores them and executes the standard multi-tier resolution (system `PATH`, cached versions, Vulkan SDK, platform fallbacks, and GitHub release downloads).
+- **Comprehensive Settings Documentation:** Added full documentation and configuration schema examples in `README.md` covering `settings.json` options.
+
+---
+
 ## [0.1.17] - 2026-09-14
 
 ### Added

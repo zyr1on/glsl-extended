@@ -12,6 +12,37 @@ use std::fs;
 use zed::settings::LspSettings;
 use zed_extension_api::{self as zed, LanguageServerId, Result, serde_json};
 
+/// Extracts the first non-empty, trimmed string matching any key in `keys` from a JSON value.
+fn extract_path_from_json(val: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for &key in keys {
+        if let Some(v) = val.get(key)
+            && let Some(s) = v.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Resolves a user-configured path if non-empty, verifying file existence or resolving via PATH.
+fn resolve_configured_path(configured: Option<String>, worktree: &zed::Worktree) -> Option<String> {
+    let path = configured?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if fs::metadata(trimmed).is_ok_and(|s| s.is_file()) {
+        return Some(trimmed.to_string());
+    }
+    if let Some(resolved) = worktree.which(trimmed) {
+        return Some(resolved);
+    }
+    Some(trimmed.to_string())
+}
+
 struct GlslExtendedExtension {
     cached_glsl_analyzer: Option<String>,
     cached_glsl_validator: Option<String>,
@@ -25,6 +56,31 @@ impl GlslExtendedExtension {
         language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<String> {
+        // 0) User explicit configuration in Zed settings.json
+        if let Ok(settings) = LspSettings::for_worktree(language_server_id.as_ref(), worktree) {
+            let configured = settings
+                .binary
+                .and_then(|b| b.path)
+                .filter(|p| !p.trim().is_empty())
+                .or_else(|| {
+                    let keys = ["glsl_analyzer_path", "analyzer_path", "path"];
+                    settings
+                        .initialization_options
+                        .as_ref()
+                        .and_then(|opts| extract_path_from_json(opts, &keys))
+                        .or_else(|| {
+                            settings
+                                .settings
+                                .as_ref()
+                                .and_then(|s| extract_path_from_json(s, &keys))
+                        })
+                });
+
+            if let Some(path) = resolve_configured_path(configured, worktree) {
+                return Ok(path);
+            }
+        }
+
         // 1) Check PATH
         if let Some(path) = worktree.which("glsl_analyzer") {
             return Ok(path);
@@ -116,9 +172,34 @@ impl GlslExtendedExtension {
     /// Locates or downloads the glsl_validator language server binary.
     fn find_glsl_validator(
         &mut self,
-        _language_server_id: &LanguageServerId,
+        language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<String> {
+        // 0) User explicit configuration in Zed settings.json
+        if let Ok(settings) = LspSettings::for_worktree(language_server_id.as_ref(), worktree) {
+            let configured = settings
+                .binary
+                .and_then(|b| b.path)
+                .filter(|p| !p.trim().is_empty())
+                .or_else(|| {
+                    let keys = ["glsl_validator_path", "validator_path", "path"];
+                    settings
+                        .initialization_options
+                        .as_ref()
+                        .and_then(|opts| extract_path_from_json(opts, &keys))
+                        .or_else(|| {
+                            settings
+                                .settings
+                                .as_ref()
+                                .and_then(|s| extract_path_from_json(s, &keys))
+                        })
+                });
+
+            if let Some(path) = resolve_configured_path(configured, worktree) {
+                return Ok(path);
+            }
+        }
+
         // 1) Check PATH (Windows, Linux, macOS)
         if let Some(path) = worktree.which("glsl_validator") {
             return Ok(path);
@@ -231,6 +312,25 @@ impl GlslExtendedExtension {
         language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<String> {
+        // 0) User explicit configuration in Zed settings.json
+        if let Ok(settings) = LspSettings::for_worktree("glsl_validator", worktree) {
+            let keys = ["glslang_validator_path", "glslang_path"];
+            let configured = settings
+                .initialization_options
+                .as_ref()
+                .and_then(|opts| extract_path_from_json(opts, &keys))
+                .or_else(|| {
+                    settings
+                        .settings
+                        .as_ref()
+                        .and_then(|s| extract_path_from_json(s, &keys))
+                });
+
+            if let Some(path) = resolve_configured_path(configured, worktree) {
+                return Ok(path);
+            }
+        }
+
         // 1) Check PATH (Windows, Linux, macOS) for either glslangValidator or glslang
         if let Some(path) = worktree.which("glslangValidator").or_else(|| worktree.which("glslang")) {
             return Ok(path);
@@ -441,9 +541,14 @@ impl zed::Extension for GlslExtendedExtension {
 
         if server_name == "glsl_validator" {
             let mut opts = settings.initialization_options.unwrap_or_else(|| serde_json::json!({}));
-            if let Ok(glslang) = self.find_glslang(language_server_id, worktree)
-                && opts.get("glslang_validator_path").is_none()
-                && opts.get("glslang_path").is_none()
+            let is_empty_val = |v: Option<&serde_json::Value>| match v {
+                None | Some(serde_json::Value::Null) => true,
+                Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+                _ => false,
+            };
+            if is_empty_val(opts.get("glslang_validator_path"))
+                && is_empty_val(opts.get("glslang_path"))
+                && let Ok(glslang) = self.find_glslang(language_server_id, worktree)
             {
                 opts["glslang_validator_path"] = serde_json::Value::String(glslang);
             }

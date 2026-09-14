@@ -2082,16 +2082,25 @@ fn main() -> io::Result<()> {
                             .and_then(|v| v.as_str())
                             .or_else(|| opts.get("glslang_path").and_then(|v| v.as_str()))
                         {
-                            custom_glslang_path = Some(p.to_string());
-                            log(&format!("Initialized with custom glslang_path={p}"));
+                            let p = p.trim();
+                            if !p.is_empty() {
+                                custom_glslang_path = Some(p.to_string());
+                                log(&format!("Initialized with custom glslang_path={p}"));
+                            }
                         }
                         if let Some(p) = opts.get("clang_format_path").and_then(|v| v.as_str()) {
-                            custom_clang_path = Some(p.to_string());
-                            log(&format!("Initialized with custom clang_format_path={p}"));
+                            let p = p.trim();
+                            if !p.is_empty() {
+                                custom_clang_path = Some(p.to_string());
+                                log(&format!("Initialized with custom clang_format_path={p}"));
+                            }
                         }
                         if let Some(v) = opts.get("default_version").and_then(|v| v.as_str()) {
-                            custom_default_version = Some(v.to_string());
-                            log(&format!("Initialized with custom default_version={v}"));
+                            let v = v.trim();
+                            if !v.is_empty() {
+                                custom_default_version = Some(v.to_string());
+                                log(&format!("Initialized with custom default_version={v}"));
+                            }
                         }
                     }
                     let resp = json!({
@@ -2324,9 +2333,16 @@ fn main() -> io::Result<()> {
                                 .and_then(|v| v.as_str())
                         })
                     {
-                        if custom_glslang_path.as_deref() != Some(p) {
-                            custom_glslang_path = Some(p.to_string());
-                            log(&format!("Updated custom_glslang_path={p}"));
+                        let p = p.trim();
+                        if !p.is_empty() {
+                            if custom_glslang_path.as_deref() != Some(p) {
+                                custom_glslang_path = Some(p.to_string());
+                                log(&format!("Updated custom_glslang_path={p}"));
+                                revalidate = true;
+                            }
+                        } else if custom_glslang_path.is_some() {
+                            custom_glslang_path = None;
+                            log("Reset custom_glslang_path to default");
                             revalidate = true;
                         }
                     }
@@ -2347,8 +2363,16 @@ fn main() -> io::Result<()> {
                                 .and_then(|v| v.as_str())
                         })
                     {
-                        custom_clang_path = Some(p.to_string());
-                        log(&format!("Updated custom_clang_path={p}"));
+                        let p = p.trim();
+                        if !p.is_empty() {
+                            if custom_clang_path.as_deref() != Some(p) {
+                                custom_clang_path = Some(p.to_string());
+                                log(&format!("Updated custom_clang_path={p}"));
+                            }
+                        } else if custom_clang_path.is_some() {
+                            custom_clang_path = None;
+                            log("Reset custom_clang_path to default");
+                        }
                     }
 
                     if let Some(v) = settings
@@ -2753,6 +2777,15 @@ mod tests {
 
         let fallback_glslang = find_glslang_validator(Some("non_existent_fake_path_xyz123"));
         assert!(fallback_glslang.is_some() || fallback_glslang.is_none());
+
+        // Empty or whitespace custom path should fall back to auto-discovery
+        let empty_clang = find_clang_format(Some("   "));
+        let none_clang = find_clang_format(None);
+        assert_eq!(empty_clang, none_clang);
+
+        let empty_glslang = find_glslang_validator(Some(""));
+        let none_glslang = find_glslang_validator(None);
+        assert_eq!(empty_glslang, none_glslang);
     }
 
     #[test]
