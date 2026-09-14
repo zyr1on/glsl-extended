@@ -45,10 +45,11 @@ impl AnalyzerBridge {
 
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
             loop {
                 let mut content_length: Option<usize> = None;
                 loop {
-                    let mut line = String::new();
+                    line.clear();
                     match reader.read_line(&mut line) {
                         Ok(0) | Err(_) => {
                             is_alive_reader.store(false, Ordering::Relaxed);
@@ -120,8 +121,9 @@ impl AnalyzerBridge {
         let payload = notif.to_string();
         let wire = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
         if let Ok(mut stdin) = self.stdin.lock() {
-            let _ = stdin.write_all(wire.as_bytes());
-            let _ = stdin.flush();
+            if stdin.write_all(wire.as_bytes()).is_err() || stdin.flush().is_err() {
+                self.is_alive.store(false, Ordering::Relaxed);
+            }
         }
     }
 
@@ -145,13 +147,34 @@ impl AnalyzerBridge {
             map.insert(id, tx);
         }
 
-        {
-            let mut stdin = self.stdin.lock().ok()?;
-            stdin.write_all(wire.as_bytes()).ok()?;
-            stdin.flush().ok()?;
+        let write_ok = if let Ok(mut stdin) = self.stdin.lock() {
+            if stdin.write_all(wire.as_bytes()).is_err() || stdin.flush().is_err() {
+                self.is_alive.store(false, Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
+        if !write_ok {
+            let mut map = self.pending_requests.lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(&id);
+            return None;
         }
 
-        let resp = rx.recv_timeout(timeout).ok()?;
+        let resp = match rx.recv_timeout(timeout) {
+            Ok(resp) => {
+                self.pending_requests.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                resp
+            }
+            Err(_) => {
+                self.pending_requests.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                return None;
+            }
+        };
+
         resp.get("result").cloned()
     }
 }
@@ -159,10 +182,10 @@ impl AnalyzerBridge {
 impl Drop for AnalyzerBridge {
     fn drop(&mut self) {
         // Send LSP shutdown + exit before marking dead
-        let _ = self.send_request("shutdown", json!(null), Duration::from_millis(500));
+        let _ = self.send_request("shutdown", json!(null), Duration::from_millis(300));
         self.send_notification("exit", json!(null));
         self.is_alive.store(false, Ordering::Relaxed);
-        // Force kill if still running
+        // Force kill if still running and reap child to prevent zombies
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
             let _ = child.wait();

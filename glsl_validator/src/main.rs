@@ -1211,7 +1211,7 @@ pub fn extract_struct_members(
 
     // If multi-segment (e.g. o.inner.field), drill down struct fields
     for &sub_seg in &segments[1..] {
-        let fields = find_fields_in_struct(&target_type, doc, doc_cache);
+        let fields = find_fields_in_struct(&target_type, vars, doc, doc_cache);
         if let Some((_, f_type)) = fields.into_iter().find(|(name, _)| name == sub_seg) {
             target_type = f_type;
         } else {
@@ -1219,11 +1219,21 @@ pub fn extract_struct_members(
         }
     }
 
-    find_fields_in_struct(&target_type, doc, doc_cache)
+    find_fields_in_struct(&target_type, vars, doc, doc_cache)
+}
+
+pub fn is_swizzle_pattern(s: &str) -> bool {
+    if s.is_empty() || s.len() > 4 {
+        return false;
+    }
+    s.chars().all(|c| matches!(c, 'x' | 'y' | 'z' | 'w'))
+        || s.chars().all(|c| matches!(c, 'r' | 'g' | 'b' | 'a'))
+        || s.chars().all(|c| matches!(c, 's' | 't' | 'p' | 'q'))
 }
 
 fn find_fields_in_struct(
     struct_name: &str,
+    vars: &[signature::VariableSymbol],
     doc: &str,
     doc_cache: &HashMap<String, String>,
 ) -> Vec<(String, String)> {
@@ -1232,11 +1242,27 @@ fn find_fields_in_struct(
         return fields;
     }
 
-    // Search doc_cache (included files)
+    // Search doc_cache (included files in memory)
     for text in doc_cache.values() {
         let fields = parse_fields_from_text(struct_name, text);
         if !fields.is_empty() {
             return fields;
+        }
+    }
+
+    // Search on disk if struct is defined in an #include file
+    if let Some(uri) = vars
+        .iter()
+        .find(|v| v.name == struct_name && v.qualifier == "struct")
+        .and_then(|v| v.file_uri.as_ref())
+    {
+        if let Some(path) = uri_to_path(uri) {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let fields = parse_fields_from_text(struct_name, &text);
+                if !fields.is_empty() {
+                    return fields;
+                }
+            }
         }
     }
 
@@ -1279,19 +1305,29 @@ fn parse_fields_from_text(struct_name: &str, text: &str) -> Vec<(String, String)
                 }
             }
 
-            if brace_depth >= 1 && trimmed.ends_with(';') {
-                let stmt = trimmed.trim_end_matches(';').trim();
+            let clean_line = trimmed.split("//").next().unwrap_or("").trim();
+            if brace_depth >= 1 && clean_line.ends_with(';') {
+                let stmt = clean_line.trim_end_matches(';').trim();
                 let tokens: Vec<&str> = stmt.split_whitespace().collect();
                 if tokens.len() >= 2 {
-                    let field_type = tokens[tokens.len() - 2];
-                    let field_name_raw = tokens[tokens.len() - 1];
-                    let field_name = field_name_raw
-                        .trim_matches(['[', ']'])
-                        .split('[')
-                        .next()
-                        .unwrap_or(field_name_raw);
-                    if signature::is_valid_identifier(field_name) {
-                        results.push((field_name.to_string(), field_type.to_string()));
+                    let field_type = tokens[0];
+                    let (field_type, names_start) = if matches!(field_type, "highp" | "mediump" | "lowp") && tokens.len() >= 3 {
+                        (tokens[1], 2)
+                    } else {
+                        (field_type, 1)
+                    };
+                    for raw in &tokens[names_start..] {
+                        for item in raw.split(',') {
+                            let item = item.trim();
+                            let field_name = item
+                                .trim_matches(['[', ']'])
+                                .split('[')
+                                .next()
+                                .unwrap_or(item);
+                            if signature::is_valid_identifier(field_name) {
+                                results.push((field_name.to_string(), field_type.to_string()));
+                            }
+                        }
                     }
                 }
             }
@@ -2050,7 +2086,7 @@ pub fn enhance_analyzer_completions(
     let mut seen_labels = HashSet::new();
 
     // 1. If dot access, prepend swizzles (for vectors) or struct members (for structs)
-    if is_dot_access && !expr_before_dot.is_empty() {
+    let is_vector = if is_dot_access && !expr_before_dot.is_empty() {
         let user_vars = if doc.contains("#include") {
             signature::resolve_includes_and_scan_variables(uri, doc, doc_cache)
         } else {
@@ -2081,6 +2117,7 @@ pub fn enhance_analyzer_completions(
                     }
                 }
             }
+            true
         } else {
             // Struct members (from user code or #includes)
             let members = extract_struct_members(&user_vars, doc, doc_cache, expr_before_dot);
@@ -2106,94 +2143,98 @@ pub fn enhance_analyzer_completions(
                     }));
                 }
             }
+            false
         }
-    } else if !is_dot_access {
-        // Normal identifier completion: Inject user variables and functions (from current doc and recursively included #include files)
-        let replace_range = json!({
-            "start": { "line": line_idx, "character": word_start },
-            "end": { "line": line_idx, "character": word_end }
-        });
+    } else {
+        if !is_dot_access {
+            // Normal identifier completion: Inject user variables and functions (from current doc and recursively included #include files)
+            let replace_range = json!({
+                "start": { "line": line_idx, "character": word_start },
+                "end": { "line": line_idx, "character": word_end }
+            });
 
-        let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+            let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
 
-        // 1. User variables & symbols (constants, structs, uniforms, etc.)
-        for var in user_vars {
-            if (word.is_empty() || starts_with_ignore_ascii_case(&var.name, word))
-                && seen_labels.insert(var.name.clone())
-            {
-                let kind = match var.qualifier.as_str() {
-                    "struct" => 22,            // Struct
-                    "const" | "#define" => 21, // Constant
-                    _ => 6,                    // Variable
-                };
+            // 1. User variables & symbols (constants, structs, uniforms, etc.)
+            for var in user_vars {
+                if (word.is_empty() || starts_with_ignore_ascii_case(&var.name, word))
+                    && seen_labels.insert(var.name.clone())
+                {
+                    let kind = match var.qualifier.as_str() {
+                        "struct" => 22,            // Struct
+                        "const" | "#define" => 21, // Constant
+                        _ => 6,                    // Variable
+                    };
 
-                let detail = format!("{} {}", var.qualifier, var.var_type);
-                let doc_text = match (&var.source, &var.doc) {
-                    (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
-                    (Some(src), None) => format!("*Defined in `{src}`*"),
-                    (None, Some(d)) => d.clone(),
-                    (None, None) => String::new(),
-                };
+                    let detail = format!("{} {}", var.qualifier, var.var_type);
+                    let doc_text = match (&var.source, &var.doc) {
+                        (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
+                        (Some(src), None) => format!("*Defined in `{src}`*"),
+                        (None, Some(d)) => d.clone(),
+                        (None, None) => String::new(),
+                    };
 
-                out_items.push(json!({
-                    "label": var.name,
-                    "kind": kind,
-                    "detail": detail,
-                    "documentation": {
-                        "kind": "markdown",
-                        "value": doc_text,
-                    },
-                    "insertText": var.name,
-                    "insertTextFormat": 1,
-                    "textEdit": {
-                        "range": replace_range,
-                        "newText": var.name
-                    },
-                    "sortText": format!("00_{}", var.name),
-                }));
+                    out_items.push(json!({
+                        "label": var.name,
+                        "kind": kind,
+                        "detail": detail,
+                        "documentation": {
+                            "kind": "markdown",
+                            "value": doc_text,
+                        },
+                        "insertText": var.name,
+                        "insertTextFormat": 1,
+                        "textEdit": {
+                            "range": replace_range,
+                            "newText": var.name
+                        },
+                        "sortText": format!("00_{}", var.name),
+                    }));
+                }
+            }
+
+            // 2. User functions (from current doc & #includes)
+            for func in user_funcs {
+                if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
+                    && seen_labels.insert(func.name.clone())
+                {
+                    let detail = func.label.clone();
+                    let doc_text = match (&func.source, &func.doc) {
+                        (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
+                        (Some(src), None) => format!("*Defined in `{src}`*"),
+                        (None, Some(d)) => d.clone(),
+                        (None, None) => String::new(),
+                    };
+
+                    let (insert_text, insert_format) = if following_has_paren {
+                        (func.name.clone(), 1)
+                    } else if func.parameters.is_empty() {
+                        (format!("{}()$0", func.name), 2)
+                    } else {
+                        (format!("{}($1)$0", func.name), 2)
+                    };
+
+                    out_items.push(json!({
+                        "label": func.name,
+                        "kind": 3, // Function
+                        "detail": detail,
+                        "documentation": {
+                            "kind": "markdown",
+                            "value": doc_text,
+                        },
+                        "insertText": insert_text,
+                        "insertTextFormat": insert_format,
+                        "textEdit": {
+                            "range": replace_range,
+                            "newText": insert_text
+                        },
+                        "sortText": format!("01_{}", func.name),
+                    }));
+                }
             }
         }
-
-        // 2. User functions (from current doc & #includes)
-        for func in user_funcs {
-            if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
-                && seen_labels.insert(func.name.clone())
-            {
-                let detail = func.label.clone();
-                let doc_text = match (&func.source, &func.doc) {
-                    (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
-                    (Some(src), None) => format!("*Defined in `{src}`*"),
-                    (None, Some(d)) => d.clone(),
-                    (None, None) => String::new(),
-                };
-
-                let (insert_text, insert_format) = if following_has_paren {
-                    (func.name.clone(), 1)
-                } else if func.parameters.is_empty() {
-                    (format!("{}()$0", func.name), 2)
-                } else {
-                    (format!("{}($1)$0", func.name), 2)
-                };
-
-                out_items.push(json!({
-                    "label": func.name,
-                    "kind": 3, // Function
-                    "detail": detail,
-                    "documentation": {
-                        "kind": "markdown",
-                        "value": doc_text,
-                    },
-                    "insertText": insert_text,
-                    "insertTextFormat": insert_format,
-                    "textEdit": {
-                        "range": replace_range,
-                        "newText": insert_text
-                    },
-                    "sortText": format!("01_{}", func.name),
-                }));
-            }
-        }
-    }
+        false
+    };
 
     // 2. Enhance items from glsl_analyzer
     for mut item in raw_items {
@@ -2201,6 +2242,18 @@ pub fn enhance_analyzer_completions(
             Some(l) => l.to_string(),
             None => continue,
         };
+
+        if is_dot_access {
+            let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+            // After a dot, only fields (5) or properties (10) are valid in GLSL.
+            if kind == 14 || kind == 25 || kind == 15 {
+                continue;
+            }
+            // If it's a struct (not a vector), NEVER allow swizzle patterns
+            if !is_vector && is_swizzle_pattern(&label) {
+                continue;
+            }
+        }
 
         if !seen_labels.insert(label.clone()) {
             continue;
@@ -2228,8 +2281,8 @@ pub fn enhance_analyzer_completions(
         out_items.push(item);
     }
 
-    // 3. Inject snippets if user is typing a snippet prefix
-    if !word.is_empty() {
+    // 3. Inject snippets if user is typing a snippet prefix (only when NOT in dot access!)
+    if !is_dot_access && !word.is_empty() {
         for snip in generate_snippet_completions(word) {
             if let Some(lbl) = snip.get("label").and_then(|l| l.as_str()) {
                 if seen_labels.insert(lbl.to_string()) {
@@ -4174,7 +4227,10 @@ void main() {
         });
         let analyzer_struct_items = json!([
             { "label": "test", "kind": 5, "detail": "vec4" },
-            { "label": "a", "kind": 5, "detail": "float" }
+            { "label": "a", "kind": 5, "detail": "float" },
+            { "label": "x", "kind": 5, "detail": "swizzle" },
+            { "label": "xy", "kind": 5, "detail": "swizzle" },
+            { "label": "while", "kind": 14, "detail": "keyword" }
         ]);
         let struct_enhanced = enhance_analyzer_completions(&req_struct, analyzer_struct_items, &doc_cache);
         let struct_items = struct_enhanced.as_array().expect("struct items array");
@@ -4182,6 +4238,9 @@ void main() {
         // Must contain "test" and "a"
         assert!(struct_items.iter().any(|i| i["label"] == "test"));
         assert!(struct_items.iter().any(|i| i["label"] == "a"));
+
+        // Must NOT contain while
+        assert!(!struct_items.iter().any(|i| i["label"] == "while"));
 
         // Must NOT contain ANY vector swizzles or length()!
         for swizzle in &["x", "y", "z", "w", "r", "g", "b", "s", "t", "p", "q", "xy", "rgba", "stpq", "length()"] {
