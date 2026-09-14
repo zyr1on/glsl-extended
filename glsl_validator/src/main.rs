@@ -446,7 +446,22 @@ fn validate_shader(
         inc_dirs.len()
     ));
 
-    let (compile_text, pre_output) = if target == TargetApi::OpenGl && text.contains("#include") {
+    let has_version = text.lines().any(|l| l.trim().starts_with("#version"));
+    let version_header = if !has_version {
+        match target {
+            TargetApi::OpenGl => "#version 460 core\n#line 1\n",
+            TargetApi::Vulkan => "#version 460\n#line 1\n",
+        }
+    } else {
+        ""
+    };
+    let input_text = if !version_header.is_empty() {
+        format!("{version_header}{text}")
+    } else {
+        text.to_string()
+    };
+
+    let (compile_text, pre_output) = if target == TargetApi::OpenGl && input_text.contains("#include") {
         log(&format!("Preprocessing '#include' directives for OpenGL target using '{compiler}'"));
         let mut prep_cmd = Command::new(&compiler);
         prep_cmd.args(["--stdin", "-E", "-S", stage]);
@@ -460,25 +475,25 @@ fn validate_shader(
             .spawn()
         {
             if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
+                let _ = stdin.write_all(input_text.as_bytes());
             }
             if let Ok(output) = child.wait_with_output() {
                 if !output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    (text.to_string(), Some(format!("{}\n{}", stdout, stderr)))
+                    (input_text.clone(), Some(format!("{}\n{}", stdout, stderr)))
                 } else {
                     let preprocessed = String::from_utf8_lossy(&output.stdout).to_string();
                     (preprocessed, None)
                 }
             } else {
-                (text.to_string(), None)
+                (input_text.clone(), None)
             }
         } else {
-            (text.to_string(), None)
+            (input_text.clone(), None)
         }
     } else {
-        (text.to_string(), None)
+        (input_text, None)
     };
 
     let full_output = if let Some(err_output) = pre_output {
@@ -948,6 +963,8 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         items.extend(generate_snippet_completions(word));
     }
 
+    let following_has_paren = line[safe_col..].trim_start().starts_with('(');
+
     // 2. User functions from current file and recursively included files (#include)
     let user_funcs = signature::resolve_includes_and_scan(uri, doc, doc_cache);
     for func in user_funcs {
@@ -964,6 +981,14 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                 continue;
             }
 
+            let (insert_text, insert_format) = if following_has_paren {
+                (func.name.clone(), 1)
+            } else if func.parameters.is_empty() {
+                (format!("{}()$0", func.name), 2)
+            } else {
+                (format!("{}($1)$0", func.name), 2)
+            };
+
             items.push(json!({
                 "label": func.name,
                 "kind": 3, // Function
@@ -972,8 +997,8 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                     "kind": "markdown",
                     "value": doc_text,
                 },
-                "insertText": func.name,
-                "insertTextFormat": 1,
+                "insertText": insert_text,
+                "insertTextFormat": insert_format,
                 "sortText": format!("01_{}", func.name),
             }));
         }
@@ -986,6 +1011,17 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                 continue;
             }
             let first_overload = builtin.overloads.first().map(|o| o.label).unwrap_or("");
+            let (insert_text, insert_format) = if following_has_paren {
+                (builtin.name.to_string(), 1)
+            } else {
+                let has_params = builtin.overloads.iter().any(|o| !o.params.is_empty());
+                if has_params {
+                    (format!("{}($1)$0", builtin.name), 2)
+                } else {
+                    (format!("{}()$0", builtin.name), 2)
+                }
+            };
+
             items.push(json!({
                 "label": builtin.name,
                 "kind": 3, // Function
@@ -994,8 +1030,8 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                     "kind": "markdown",
                     "value": builtin.description,
                 },
-                "insertText": builtin.name,
-                "insertTextFormat": 1,
+                "insertText": insert_text,
+                "insertTextFormat": insert_format,
                 "sortText": format!("02_{}", builtin.name),
             }));
         }
@@ -2203,6 +2239,7 @@ vec3 calculateNormal(mat4 normal, vec3 aNormal) {
         let norm_items = norm_res.as_array().expect("norm items");
         let norm_item = norm_items.iter().find(|it| it["label"] == "normalize");
         assert!(norm_item.is_some(), "normalize must be found in completions");
+        assert_eq!(norm_item.unwrap()["insertText"], "normalize($1)$0");
 
         // Comment test: typing inside comment should return empty list
         let comment_code = "// norm";
@@ -2216,5 +2253,21 @@ vec3 calculateNormal(mat4 normal, vec3 aNormal) {
         let comment_res = handle_completion(&comment_req, &doc_cache);
         let comment_items = comment_res.as_array().expect("comment items");
         assert!(comment_items.is_empty(), "Completions must be empty inside comments");
+    }
+
+    #[test]
+    fn test_validate_without_version_header_recognizes_modern_glsl() {
+        let code = r#"
+vec3 calculateNormal(mat4 model, vec3 aNormal) {
+    mat3 m3 = mat3(model);
+    mat3 inv = inverse(m3);
+    mat3 normalMatrix = transpose(inv);
+    return normalMatrix * aNormal;
+}
+"#;
+        let diags = validate_shader("file:///shader.vert", code, TargetApi::OpenGl, None);
+        // If glslangValidator is installed, it must produce 0 errors.
+        let errors: Vec<_> = diags.iter().filter(|d| d["severity"] == 1).collect();
+        assert!(errors.is_empty(), "Should compile modern inverse/transpose without errors: {:?}", errors);
     }
 }

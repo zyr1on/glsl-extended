@@ -2,6 +2,17 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.9] - 2026-09-14
+
+### Added
+- **Parentheses Insertion on Function Autocompletion:** Autocompleting functions (e.g. `inverse`, `normalize`, or user-defined functions) now automatically appends `()` snippet with the cursor positioned inside the parentheses (`function($1)$0`). If an opening parenthesis `(` is already present after the cursor, plain text insertion is used to avoid duplicate parentheses.
+- **Modern GLSL Header Fallback:** Automatically prepends `#version 460 core` (or `#version 460` for Vulkan) with `#line 1` when validating files that lack an explicit `#version` directive (such as included `.glsl` helper files). This eliminates obsolete GLSL 110 legacy errors (such as `cannot convert from 'const float' to 'matrix'` when calling modern built-ins like `inverse` or `transpose`) while keeping compiler diagnostic line numbers 100% accurate.
+
+### Fixed
+- **GLSL 110 Undeclared Function Resolution:** Fixed false-positive compile errors on modern built-in functions (`inverse()`, `transpose()`, etc.) in header/include files that do not declare a `#version` line.
+
+---
+
 ## [0.1.8] - 2026-09-14
 
 ### Added
