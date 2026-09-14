@@ -99,11 +99,9 @@ pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Optio
                     break;
                 }
             }
-            b';' => {
-                if depth == 0 && bracket_depth == 0 && brace_depth == 0 {
-                    // Reached statement separator
-                    break;
-                }
+            b';' if depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                // Reached statement separator
+                break;
             }
             _ => {}
         }
@@ -155,10 +153,8 @@ pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Optio
                     inner_brace -= 1;
                 }
             }
-            b',' => {
-                if inner_paren == 0 && inner_bracket == 0 && inner_brace == 0 {
-                    active_param += 1;
-                }
+            b',' if inner_paren == 0 && inner_bracket == 0 && inner_brace == 0 => {
+                active_param += 1;
             }
             _ => {}
         }
@@ -338,11 +334,7 @@ pub fn resolve_includes_and_scan(
 
                 // Check doc_cache by file:/// URI first (0 disk I/O, live unsaved buffer)
                 let candidate_uri = format!("file:///{}", candidate.to_string_lossy().replace('\\', "/"));
-                let content = if let Some(cached) = doc_cache.get(&candidate_uri) {
-                    Some(cached.as_str())
-                } else {
-                    None
-                };
+                let content = doc_cache.get(&candidate_uri).map(|cached| cached.as_str());
 
                 let disk_content;
                 let text_ref = match content {
