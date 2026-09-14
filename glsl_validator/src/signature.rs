@@ -7,6 +7,16 @@ use serde_json::{json, Value};
 use crate::docs;
 use crate::uri_to_path;
 
+const INVALID_TYPES: &[&str] = &[
+    "return", "else", "case", "default", "discard", "break", "continue", "goto", "layout", "precision",
+];
+const INVALID_NAMES: &[&str] = &[
+    "if", "for", "while", "switch", "return", "layout", "struct", "subroutine",
+];
+const CONTROL_KEYWORDS: &[&str] = &[
+    "if", "for", "while", "switch", "catch", "return",
+];
+
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
     pub name: String,
@@ -18,18 +28,27 @@ pub struct FunctionSignature {
 }
 
 /// Identifies the function call surrounding the cursor and the active parameter index.
+/// CRLF-safe, zero-allocation byte scanning.
 pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Option<(String, usize)> {
-    let mut offset = 0;
-    for (i, line) in text.lines().enumerate() {
-        if i == line_idx {
-            offset += col_idx.min(line.len());
+    let mut current_line = 0;
+    let mut offset = text.len();
+    let mut line_start = 0;
+
+    for (idx, b) in text.bytes().enumerate() {
+        if current_line == line_idx {
+            line_start = idx;
             break;
         }
-        offset += line.len() + 1; // +1 for newline
+        if b == b'\n' {
+            current_line += 1;
+        }
     }
 
-    if offset > text.len() {
-        offset = text.len();
+    if current_line == line_idx {
+        let line_slice = &text[line_start..];
+        let raw_line_len = line_slice.find('\n').unwrap_or(line_slice.len());
+        let line_len = line_slice[..raw_line_len].trim_end_matches('\r').len();
+        offset = line_start + col_idx.min(line_len);
     }
 
     let bytes = text.as_bytes();
@@ -104,14 +123,8 @@ pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Optio
         }
     }
 
-    let fn_name = trimmed[ident_start..].trim().to_string();
-    if fn_name.is_empty() {
-        return None;
-    }
-
-    // Check if the identifier is a control flow keyword (if, for, while, switch)
-    let keywords = ["if", "for", "while", "switch", "catch", "return"];
-    if keywords.contains(&fn_name.as_str()) {
+    let fn_name = trimmed[ident_start..].trim();
+    if fn_name.is_empty() || CONTROL_KEYWORDS.contains(&fn_name) {
         return None;
     }
 
@@ -151,20 +164,91 @@ pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Optio
         }
     }
 
-    Some((fn_name, active_param))
+    Some((fn_name.to_string(), active_param))
 }
 
-/// Parses function signatures from GLSL source text.
+fn parse_function_header(
+    header: &str,
+    pending_doc: &[String],
+    source_name: Option<&str>,
+) -> Option<FunctionSignature> {
+    let open_paren = header.find('(')?;
+    let close_paren = header.rfind(')')?;
+    if close_paren <= open_paren {
+        return None;
+    }
+
+    let before = header[..open_paren].trim();
+    let tokens: Vec<&str> = before.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    let fn_name = tokens.last()?.to_string();
+    let return_type = tokens[tokens.len() - 2].to_string();
+
+    let params_str = header[open_paren + 1..close_paren].trim();
+    let parameters: Vec<String> = if params_str.is_empty() || params_str == "void" {
+        Vec::new()
+    } else {
+        params_str
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    };
+
+    let param_joined = parameters.join(", ");
+    let label = format!("{return_type} {fn_name}({param_joined})");
+    let doc = if !pending_doc.is_empty() {
+        Some(pending_doc.join("\n"))
+    } else {
+        None
+    };
+
+    Some(FunctionSignature {
+        name: fn_name,
+        return_type,
+        label,
+        parameters,
+        doc,
+        source: source_name.map(|s| s.to_string()),
+    })
+}
+
+/// Parses function signatures from GLSL source text without allocating an entire lines vector.
 pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<FunctionSignature> {
     let mut results = Vec::new();
     let mut pending_doc = Vec::new();
-
-    let lines: Vec<&str> = text.lines().collect();
-    let mut i = 0;
     let mut brace_level: usize = 0;
+    let mut multiline_header: Option<String> = None;
 
-    while i < lines.len() {
-        let line = lines[i].trim();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+
+        // Handle multi-line function declaration continuation
+        if let Some(mut header) = multiline_header.take() {
+            header.push(' ');
+            header.push_str(line);
+
+            if let Some(close_idx) = header.find(')') {
+                if let Some(sig) = parse_function_header(&header[..=close_idx], &pending_doc, source_name) {
+                    results.push(sig);
+                }
+                pending_doc.clear();
+            } else {
+                multiline_header = Some(header);
+            }
+
+            for b in line.bytes() {
+                if b == b'{' {
+                    brace_level += 1;
+                } else if b == b'}' {
+                    brace_level = brace_level.saturating_sub(1);
+                }
+            }
+            continue;
+        }
 
         // Collect doc comments at top level
         if line.starts_with("//") {
@@ -172,7 +256,6 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
                 let doc_line = line.trim_start_matches('/').trim();
                 pending_doc.push(doc_line.to_string());
             }
-            i += 1;
             continue;
         }
 
@@ -180,7 +263,6 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
             if brace_level == 0 {
                 pending_doc.clear();
             }
-            i += 1;
             continue;
         }
 
@@ -194,57 +276,18 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
                     let fn_name = tokens.last().unwrap();
                     let return_type = tokens[tokens.len() - 2];
 
-                    let invalid_types = ["return", "else", "case", "default", "discard", "break", "continue", "goto", "layout", "precision"];
-                    let invalid_names = ["if", "for", "while", "switch", "return", "layout", "struct", "subroutine"];
-
                     let is_valid_name = !fn_name.is_empty()
-                        && (fn_name.chars().next().unwrap().is_alphabetic() || fn_name.starts_with('_'))
+                        && (fn_name.starts_with(|c: char| c.is_alphabetic() || c == '_'))
                         && fn_name.chars().all(|c| c.is_alphanumeric() || c == '_');
 
-                    if is_valid_name && !invalid_names.contains(fn_name) && !invalid_types.contains(&return_type) {
-                        // Accumulate parameter list up to ')'
-                        let mut full_header = line.to_string();
-                        let mut close_paren = full_header.find(')');
-                        let mut j = i;
-
-                        while close_paren.is_none() && j + 1 < lines.len() {
-                            j += 1;
-                            full_header.push(' ');
-                            full_header.push_str(lines[j].trim());
-                            close_paren = full_header.find(')');
-                        }
-
-                        if let Some(close_idx) = full_header.find(')') {
-                            if let Some(start_paren) = full_header.find('(') {
-                                let params_str = &full_header[start_paren + 1..close_idx].trim();
-                                let parameters: Vec<String> = if params_str.is_empty() || *params_str == "void" {
-                                    Vec::new()
-                                } else {
-                                    params_str
-                                        .split(',')
-                                        .map(|p| p.trim().to_string())
-                                        .filter(|p| !p.is_empty())
-                                        .collect()
-                                };
-
-                                let param_joined = parameters.join(", ");
-                                let label = format!("{return_type} {fn_name}({param_joined})");
-
-                                let doc = if !pending_doc.is_empty() {
-                                    Some(pending_doc.join("\n"))
-                                } else {
-                                    None
-                                };
-
-                                results.push(FunctionSignature {
-                                    name: fn_name.to_string(),
-                                    return_type: return_type.to_string(),
-                                    label,
-                                    parameters,
-                                    doc,
-                                    source: source_name.map(|s| s.to_string()),
-                                });
+                    if is_valid_name && !INVALID_NAMES.contains(fn_name) && !INVALID_TYPES.contains(&return_type) {
+                        if let Some(close_idx) = line.find(')') {
+                            if let Some(sig) = parse_function_header(&line[..=close_idx], &pending_doc, source_name) {
+                                results.push(sig);
                             }
+                            pending_doc.clear();
+                        } else {
+                            multiline_header = Some(line.to_string());
                         }
                     }
                 }
@@ -260,10 +303,9 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
             }
         }
 
-        if brace_level == 0 {
+        if brace_level == 0 && multiline_header.is_none() {
             pending_doc.clear();
         }
-        i += 1;
     }
 
     results
@@ -282,35 +324,45 @@ pub fn resolve_includes_and_scan(
 
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("#include") {
-            let include_target = trimmed
-                .trim_start_matches("#include")
-                .trim()
-                .trim_matches(['"', '<', '>']);
+        if let Some(rest) = trimmed.strip_prefix("#include") {
+            let include_target = rest.trim().trim_matches(['"', '<', '>']);
+            if include_target.is_empty() {
+                continue;
+            }
 
             if let Some(ref dir) = base_dir {
                 let candidate = dir.join(include_target);
-                if visited.contains(&candidate) {
+                if !visited.insert(candidate.clone()) {
                     continue;
                 }
-                visited.insert(candidate.clone());
 
-                // Check doc_cache by file:/// URI first
+                // Check doc_cache by file:/// URI first (0 disk I/O, live unsaved buffer)
                 let candidate_uri = format!("file:///{}", candidate.to_string_lossy().replace('\\', "/"));
                 let content = if let Some(cached) = doc_cache.get(&candidate_uri) {
-                    Some(cached.clone())
-                } else if candidate.is_file() {
-                    std::fs::read_to_string(&candidate).ok()
+                    Some(cached.as_str())
                 } else {
                     None
                 };
 
-                if let Some(content_text) = content {
+                let disk_content;
+                let text_ref = match content {
+                    Some(c) => Some(c),
+                    None => {
+                        if candidate.is_file() {
+                            disk_content = std::fs::read_to_string(&candidate).ok();
+                            disk_content.as_deref()
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                if let Some(content_text) = text_ref {
                     let source_label = candidate
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or(include_target);
-                    let inc_funcs = scan_user_functions(&content_text, Some(source_label));
+                    let inc_funcs = scan_user_functions(content_text, Some(source_label));
                     all_functions.extend(inc_funcs);
                 }
             }
@@ -341,9 +393,9 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
         None => return json!(null),
     };
 
-    // 1. Check built-in functions (docs.gl)
+    // 1. Fast lookup: Check built-in functions (docs.gl) - takes microseconds, 0 disk I/O
     if let Some(builtin) = docs::lookup_builtin_function(&fn_name) {
-        let mut signatures = Vec::new();
+        let mut signatures = Vec::with_capacity(builtin.overloads.len());
         let mut active_sig = 0;
 
         for (idx, overload) in builtin.overloads.iter().enumerate() {
@@ -380,7 +432,7 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
     let matched_funcs: Vec<&FunctionSignature> = user_funcs.iter().filter(|f| f.name == fn_name).collect();
 
     if !matched_funcs.is_empty() {
-        let mut signatures = Vec::new();
+        let mut signatures = Vec::with_capacity(matched_funcs.len());
         let mut active_sig = 0;
 
         for (idx, func) in matched_funcs.iter().enumerate() {
@@ -470,7 +522,7 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         return json!(null);
     }
 
-    // 1. Built-in functions (docs.gl)
+    // 1. Fast lookup: Built-in functions (docs.gl)
     if let Some(builtin) = docs::lookup_builtin_function(word) {
         let mut overloads_str = String::new();
         for ol in builtin.overloads {
@@ -596,5 +648,35 @@ vec3 calcualteNormal(mat4 normal, vec3 aNormal){
 
         let tex = docs::lookup_builtin_function("texture");
         assert!(tex.is_some());
+    }
+
+    #[test]
+    fn test_scan_multiline_function_and_docs() {
+        let code = r#"
+// Calculates lighting attenuation
+// based on distance.
+float calculateAttenuation(
+    float distance,
+    float constant,
+    float linear,
+    float quadratic
+) {
+    return 1.0 / (constant + linear * distance + quadratic * distance * distance);
+}
+"#;
+        let funcs = scan_user_functions(code, None);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "calculateAttenuation");
+        assert_eq!(funcs[0].parameters.len(), 4);
+        assert!(funcs[0].doc.is_some());
+        assert!(funcs[0].doc.as_ref().unwrap().contains("attenuation"));
+    }
+
+    #[test]
+    fn test_find_enclosing_call_crlf() {
+        let code = "vec3 a = vec3(1.0);\r\nvec3 b = calcualteNormal(a, );\r\n";
+        // Line 1 (0-indexed), after comma and space: col 28
+        let call = find_enclosing_call(code, 1, 28);
+        assert_eq!(call, Some(("calcualteNormal".to_string(), 1)));
     }
 }
