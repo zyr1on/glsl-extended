@@ -525,6 +525,9 @@ impl zed::Extension for GlslExtendedExtension {
                 if let Ok(glslang) = self.find_glslang(language_server_id, worktree) {
                     env.push(("GLSLANG_VALIDATOR_PATH".to_string(), glslang));
                 }
+                if let Ok(analyzer) = self.find_glsl_analyzer(language_server_id, worktree) {
+                    env.push(("GLSL_ANALYZER_PATH".to_string(), analyzer));
+                }
                 Ok(zed::Command {
                     command: validator,
                     args: vec![],
@@ -555,6 +558,12 @@ impl zed::Extension for GlslExtendedExtension {
                 && let Ok(glslang) = self.find_glslang(language_server_id, worktree)
             {
                 opts["glslang_validator_path"] = serde_json::Value::String(glslang);
+            }
+            if is_empty_val(opts.get("glsl_analyzer_path"))
+                && is_empty_val(opts.get("analyzer_path"))
+                && let Ok(analyzer) = self.find_glsl_analyzer(language_server_id, worktree)
+            {
+                opts["glsl_analyzer_path"] = serde_json::Value::String(analyzer);
             }
             return Ok(Some(opts));
         }

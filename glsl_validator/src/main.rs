@@ -1,6 +1,8 @@
+pub mod analyzer_bridge;
 pub mod docs;
 pub mod signature;
 
+use analyzer_bridge::AnalyzerBridge;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
@@ -13,7 +15,7 @@ use std::thread;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-fn create_command<S: AsRef<std::ffi::OsStr>>(prog: S) -> Command {
+pub fn create_command<S: AsRef<std::ffi::OsStr>>(prog: S) -> Command {
     #[cfg(windows)]
     {
         let mut cmd = Command::new(prog);
@@ -224,6 +226,84 @@ fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
         for path in candidates {
             if Path::new(path).is_file() {
                 return Some(path.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+pub fn find_glsl_analyzer(custom_path: Option<&str>) -> Option<String> {
+    // 1. Explicit user configuration from Zed settings.json
+    if let Some(custom) = custom_path {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            if Path::new(trimmed).is_file() {
+                return Some(trimmed.to_string());
+            }
+            if let Some(p) = find_in_path(trimmed) {
+                return Some(p.to_string_lossy().to_string());
+            }
+            if is_in_path(trimmed) {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    // 2. Explicit user environment variable override
+    if let Ok(env_path) = std::env::var("GLSL_ANALYZER_PATH") {
+        if Path::new(&env_path).is_file() {
+            return Some(env_path);
+        }
+    }
+
+    // 3. Primary: System PATH
+    if let Some(p) = find_in_path("glsl_analyzer") {
+        return Some(p.to_string_lossy().to_string());
+    }
+    if is_in_path("glsl_analyzer") {
+        return Some("glsl_analyzer".to_string());
+    }
+
+    // 4. User cargo bin directory (~/.cargo/bin/glsl_analyzer)
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let cargo_bin = PathBuf::from(home)
+            .join(".cargo")
+            .join("bin")
+            .join(format!("glsl_analyzer{exe}"));
+        if cargo_bin.is_file() {
+            return Some(cargo_bin.to_string_lossy().to_string());
+        }
+    }
+
+    // 5. Check relative sibling directories (extracted by Zed extension)
+    if let Ok(exe_path) = std::env::current_exe() {
+        let search_dirs = [
+            exe_path.parent(),
+            exe_path.parent().and_then(|p| p.parent()),
+        ];
+        for dir in search_dirs.into_iter().flatten() {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir()
+                        && path
+                            .file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with("glsl_analyzer-"))
+                    {
+                        let bin_dir = path.join("bin");
+                        let candidates = [
+                            bin_dir.join(format!("glsl_analyzer{exe}")),
+                            path.join(format!("glsl_analyzer{exe}")),
+                        ];
+                        for cand in candidates {
+                            if cand.is_file() {
+                                return Some(cand.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1580,6 +1660,201 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     json!(items)
 }
 
+pub fn enhance_analyzer_completions(
+    msg: &Value,
+    analyzer_res: Value,
+    doc_cache: &HashMap<String, String>,
+) -> Value {
+    let raw_items = if let Some(arr) = analyzer_res.as_array() {
+        arr.clone()
+    } else if let Some(items) = analyzer_res.get("items").and_then(|it| it.as_array()) {
+        items.clone()
+    } else {
+        return handle_completion(msg, doc_cache);
+    };
+
+    if raw_items.is_empty() {
+        return handle_completion(msg, doc_cache);
+    }
+
+    let params = match msg.get("params") {
+        Some(p) => p,
+        None => return json!(raw_items),
+    };
+
+    let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
+    let line_idx = params["position"]["line"].as_u64().unwrap_or(0) as usize;
+    let col_idx = params["position"]["character"].as_u64().unwrap_or(0) as usize;
+
+    let doc = match doc_cache.get(uri) {
+        Some(d) => d,
+        None => return json!(raw_items),
+    };
+
+    let line = match doc.lines().nth(line_idx) {
+        Some(l) => l,
+        None => return json!(raw_items),
+    };
+
+    let safe_col = {
+        let max_col = col_idx.min(line.len());
+        if line.is_char_boundary(max_col) {
+            max_col
+        } else {
+            (0..=max_col)
+                .rev()
+                .find(|&i| line.is_char_boundary(i))
+                .unwrap_or(0)
+        }
+    };
+    let prefix = &line[..safe_col];
+
+    // Check if following character is '('
+    let mut word_end = safe_col;
+    for (i, c) in line[safe_col..].char_indices() {
+        if c.is_alphanumeric() || c == '_' {
+            word_end = safe_col + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let following_has_paren = line[word_end..].trim_start().starts_with('(');
+
+    // Extract word
+    let mut word_start = prefix.len();
+    for (i, c) in prefix.char_indices().rev() {
+        if c.is_alphanumeric() || c == '_' {
+            word_start = i;
+        } else {
+            break;
+        }
+    }
+    let word = &prefix[word_start..];
+
+    // Swizzle detection
+    let (is_dot_access, expr_before_dot, member_word, dot_col) = {
+        let trimmed = prefix.trim_end();
+        if let Some(stripped) = trimmed.strip_suffix('.') {
+            let before_dot = stripped.trim_end();
+            let mut start = before_dot.len();
+            for (i, c) in before_dot.char_indices().rev() {
+                if c.is_alphanumeric() || c == '_' || c == '.' {
+                    start = i;
+                } else {
+                    break;
+                }
+            }
+            let expr = &before_dot[start..];
+            (true, expr, "", stripped.len())
+        } else {
+            let mut w_start = prefix.len();
+            for (i, c) in prefix.char_indices().rev() {
+                if c.is_alphanumeric() || c == '_' {
+                    w_start = i;
+                } else {
+                    break;
+                }
+            }
+            let w = &prefix[w_start..];
+            let before_word = prefix[..w_start].trim_end();
+            if let Some(stripped) = before_word.strip_suffix('.') {
+                let before_dot = stripped.trim_end();
+                let mut start = before_dot.len();
+                for (i, c) in before_dot.char_indices().rev() {
+                    if c.is_alphanumeric() || c == '_' || c == '.' {
+                        start = i;
+                    } else {
+                        break;
+                    }
+                }
+                let expr = &before_dot[start..];
+                (true, expr, w, stripped.len())
+            } else {
+                (false, "", "", 0)
+            }
+        }
+    };
+
+    let mut out_items = Vec::new();
+    let mut seen_labels = HashSet::new();
+
+    // 1. If swizzle triggered, prepend swizzles!
+    if is_dot_access && !expr_before_dot.is_empty() {
+        let (_, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+        let dim = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot);
+        let mut swizzles = generate_swizzle_completions(dim);
+        if !member_word.is_empty() {
+            swizzles.retain(|s| {
+                s["label"]
+                    .as_str()
+                    .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
+            });
+        }
+        let swizzle_range = json!({
+            "start": { "line": line_idx, "character": dot_col + 1 },
+            "end": { "line": line_idx, "character": safe_col }
+        });
+        for item in &mut swizzles {
+            if let Some(obj) = item.as_object_mut() {
+                let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+                if seen_labels.insert(label.clone()) {
+                    obj.insert("textEdit".to_string(), json!({
+                        "range": swizzle_range,
+                        "newText": label
+                    }));
+                    out_items.push(Value::Object(obj.clone()));
+                }
+            }
+        }
+    }
+
+    // 2. Enhance items from glsl_analyzer
+    for mut item in raw_items {
+        let label = match item.get("label").and_then(|l| l.as_str()) {
+            Some(l) => l.to_string(),
+            None => continue,
+        };
+
+        if !seen_labels.insert(label.clone()) {
+            continue;
+        }
+
+        let kind = item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+
+        // Enhance functions with ($1)$0 if not following '('
+        if kind == 3 {
+            let has_insert = item.get("insertText").and_then(|t| t.as_str()).is_some();
+            let current_insert = item.get("insertText").and_then(|t| t.as_str()).unwrap_or(&label);
+            if !current_insert.ends_with(')') && !following_has_paren {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("insertText".to_string(), json!(format!("{}($1)$0", label)));
+                    obj.insert("insertTextFormat".to_string(), json!(2));
+                }
+            } else if following_has_paren && !has_insert {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("insertText".to_string(), json!(label));
+                    obj.insert("insertTextFormat".to_string(), json!(1));
+                }
+            }
+        }
+
+        out_items.push(item);
+    }
+
+    // 3. Inject snippets if user is typing a snippet prefix
+    if !word.is_empty() {
+        for snip in generate_snippet_completions(word) {
+            if let Some(lbl) = snip.get("label").and_then(|l| l.as_str()) {
+                if seen_labels.insert(lbl.to_string()) {
+                    out_items.push(snip);
+                }
+            }
+        }
+    }
+
+    json!(out_items)
+}
+
 static WARNED_CLANG_FORMAT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -2230,8 +2505,10 @@ fn main() -> io::Result<()> {
     let mut default_target = TargetApi::OpenGl;
     let mut default_engine = FormatterEngine::ClangFormat;
     let mut custom_glslang_path: Option<String> = None;
+    let mut custom_analyzer_path: Option<String> = None;
     let mut custom_clang_path: Option<String> = None;
     let mut custom_default_version: Option<String> = None;
+    let mut analyzer_bridge: Option<Arc<AnalyzerBridge>> = None;
 
     loop {
         let mut content_length: Option<usize> = None;
@@ -2305,6 +2582,17 @@ fn main() -> io::Result<()> {
                                 log(&format!("Initialized with custom glslang_path={p}"));
                             }
                         }
+                        if let Some(p) = opts
+                            .get("glsl_analyzer_path")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| opts.get("analyzer_path").and_then(|v| v.as_str()))
+                        {
+                            let p = p.trim();
+                            if !p.is_empty() {
+                                custom_analyzer_path = Some(p.to_string());
+                                log(&format!("Initialized with custom glsl_analyzer_path={p}"));
+                            }
+                        }
                         if let Some(p) = opts.get("clang_format_path").and_then(|v| v.as_str()) {
                             let p = p.trim();
                             if !p.is_empty() {
@@ -2320,6 +2608,20 @@ fn main() -> io::Result<()> {
                             }
                         }
                     }
+
+                    // Connect to glsl_analyzer backend process if available
+                    let analyzer_bin = find_glsl_analyzer(custom_analyzer_path.as_deref());
+                    if let Some(ref path) = analyzer_bin {
+                        log(&format!("Spawning glsl_analyzer backend from '{path}'"));
+                        if let Some(bridge) = AnalyzerBridge::start(path) {
+                            let _ = bridge.send_request("initialize", msg["params"].clone(), std::time::Duration::from_secs(3));
+                            bridge.send_notification("initialized", json!({}));
+                            analyzer_bridge = Some(Arc::new(bridge));
+                        }
+                    } else {
+                        log("glsl_analyzer binary not detected, using built-in language engine.");
+                    }
+
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2345,8 +2647,20 @@ fn main() -> io::Result<()> {
                 }
                 "textDocument/signatureHelp" => {
                     let sig_help = {
-                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
-                        signature::handle_signature_help(&msg, &cache)
+                        let mut bridge_sig = None;
+                        if let Some(bridge) = analyzer_bridge.as_ref() {
+                            if let Some(res) = bridge.send_request("textDocument/signatureHelp", msg["params"].clone(), std::time::Duration::from_millis(200)) {
+                                if !res.is_null() && res.get("signatures").and_then(|s| s.as_array()).is_some_and(|a| !a.is_empty()) {
+                                    bridge_sig = Some(res);
+                                }
+                            }
+                        }
+                        if let Some(s) = bridge_sig {
+                            s
+                        } else {
+                            let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                            signature::handle_signature_help(&msg, &cache)
+                        }
                     };
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -2357,8 +2671,20 @@ fn main() -> io::Result<()> {
                 }
                 "textDocument/hover" => {
                     let hover_info = {
-                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
-                        signature::handle_hover(&msg, &cache)
+                        let mut bridge_hover = None;
+                        if let Some(bridge) = analyzer_bridge.as_ref() {
+                            if let Some(res) = bridge.send_request("textDocument/hover", msg["params"].clone(), std::time::Duration::from_millis(300)) {
+                                if !res.is_null() && res.get("contents").is_some() {
+                                    bridge_hover = Some(res);
+                                }
+                            }
+                        }
+                        if let Some(h) = bridge_hover {
+                            h
+                        } else {
+                            let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                            signature::handle_hover(&msg, &cache)
+                        }
                     };
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -2369,8 +2695,20 @@ fn main() -> io::Result<()> {
                 }
                 "textDocument/definition" => {
                     let def_info = {
-                        let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
-                        signature::handle_definition(&msg, &cache)
+                        let mut bridge_def = None;
+                        if let Some(bridge) = analyzer_bridge.as_ref() {
+                            if let Some(res) = bridge.send_request("textDocument/definition", msg["params"].clone(), std::time::Duration::from_millis(300)) {
+                                if !res.is_null() && (res.as_array().is_some_and(|a| !a.is_empty()) || res.is_object()) {
+                                    bridge_def = Some(res);
+                                }
+                            }
+                        }
+                        if let Some(d) = bridge_def {
+                            d
+                        } else {
+                            let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
+                            signature::handle_definition(&msg, &cache)
+                        }
                     };
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -2382,7 +2720,15 @@ fn main() -> io::Result<()> {
                 "textDocument/completion" => {
                     let items = {
                         let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
-                        handle_completion(&msg, &cache)
+                        if let Some(bridge) = analyzer_bridge.as_ref() {
+                            if let Some(analyzer_res) = bridge.send_request("textDocument/completion", msg["params"].clone(), std::time::Duration::from_millis(400)) {
+                                enhance_analyzer_completions(&msg, analyzer_res, &cache)
+                            } else {
+                                handle_completion(&msg, &cache)
+                            }
+                        } else {
+                            handle_completion(&msg, &cache)
+                        }
                     };
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -2634,6 +2980,39 @@ fn main() -> io::Result<()> {
                         log(&format!("Updated default_engine to {:?}", default_engine));
                     }
 
+                    if let Some(p) = settings
+                        .get("glsl_analyzer_path")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| settings.get("analyzer_path").and_then(|v| v.as_str()))
+                        .or_else(|| {
+                            settings
+                                .get("glsl_validator")
+                                .and_then(|g| g.get("glsl_analyzer_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            settings
+                                .get("initialization_options")
+                                .and_then(|g| g.get("glsl_analyzer_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                    {
+                        let p = p.trim();
+                        if !p.is_empty() && custom_analyzer_path.as_deref() != Some(p) {
+                            custom_analyzer_path = Some(p.to_string());
+                            log(&format!("Updated custom_analyzer_path={p}"));
+                            if let Some(bridge) = AnalyzerBridge::start(p) {
+                                let init_params = json!({
+                                    "processId": std::process::id(),
+                                    "capabilities": {}
+                                });
+                                let _ = bridge.send_request("initialize", init_params, std::time::Duration::from_secs(3));
+                                bridge.send_notification("initialized", json!({}));
+                                analyzer_bridge = Some(Arc::new(bridge));
+                            }
+                        }
+                    }
+
                     if revalidate {
                         if let Ok(cache) = doc_cache.lock() {
                             for (uri, text) in cache.iter() {
@@ -2650,6 +3029,9 @@ fn main() -> io::Result<()> {
                 }
             }
             "textDocument/didOpen" => {
+                if let Some(bridge) = analyzer_bridge.as_ref() {
+                    bridge.send_notification("textDocument/didOpen", msg["params"].clone());
+                }
                 if let Some(doc) = msg["params"]["textDocument"].as_object() {
                     let uri = doc.get("uri").and_then(|u| u.as_str()).unwrap_or("");
                     let text = doc.get("text").and_then(|t| t.as_str()).unwrap_or("");
@@ -2668,6 +3050,9 @@ fn main() -> io::Result<()> {
                 }
             }
             "textDocument/didChange" => {
+                if let Some(bridge) = analyzer_bridge.as_ref() {
+                    bridge.send_notification("textDocument/didChange", msg["params"].clone());
+                }
                 if let Some(params) = msg["params"].as_object() {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     if let Some(changes) = params.get("contentChanges").and_then(|c| c.as_array()) {
@@ -2690,6 +3075,9 @@ fn main() -> io::Result<()> {
                 }
             }
             "textDocument/didSave" => {
+                if let Some(bridge) = analyzer_bridge.as_ref() {
+                    bridge.send_notification("textDocument/didSave", msg["params"].clone());
+                }
                 if let Some(params) = msg["params"].as_object() {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     log(&format!("didSave: {uri}"));
@@ -2706,6 +3094,9 @@ fn main() -> io::Result<()> {
                 }
             }
             "textDocument/didClose" => {
+                if let Some(bridge) = analyzer_bridge.as_ref() {
+                    bridge.send_notification("textDocument/didClose", msg["params"].clone());
+                }
                 if let Some(params) = msg["params"].as_object() {
                     let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
                     log(&format!("didClose: {uri}"));
@@ -3360,6 +3751,82 @@ void main() {
                 seen.insert(lbl),
                 "Duplicate completion label found: '{lbl}'"
             );
+        }
+    }
+
+    #[test]
+    fn test_enhance_analyzer_completions() {
+        let code = r#"#version 460 core
+void main() {
+    vec4 myVec = vec4(1.0);
+    myVec.x
+    dot
+}
+"#;
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("file:///test.frag".to_string(), code.to_string());
+
+        // 1. Test function item from analyzer gets ($1)$0 inserted
+        let req_dot = json!({
+            "params": {
+                "textDocument": { "uri": "file:///test.frag" },
+                "position": { "line": 4, "character": 7 }
+            }
+        });
+        let analyzer_items = json!([
+            {
+                "label": "dot",
+                "kind": 3,
+                "detail": "float dot(genType x, genType y)"
+            },
+            {
+                "label": "myVec",
+                "kind": 6,
+                "detail": "vec4"
+            }
+        ]);
+        let enhanced = enhance_analyzer_completions(&req_dot, analyzer_items, &doc_cache);
+        let items = enhanced.as_array().expect("items array");
+
+        let dot_item = items.iter().find(|i| i["label"] == "dot").expect("dot item");
+        assert_eq!(dot_item["insertText"].as_str().unwrap(), "dot($1)$0");
+        assert_eq!(dot_item["insertTextFormat"].as_u64().unwrap(), 2);
+
+        // 2. Test swizzle injection on dot access with prefix 'x': myVec.x
+        let req_swizzle = json!({
+            "params": {
+                "textDocument": { "uri": "file:///test.frag" },
+                "position": { "line": 3, "character": 11 }
+            }
+        });
+        let empty_analyzer = json!([]);
+        let enhanced_swizzle = enhance_analyzer_completions(&req_swizzle, empty_analyzer, &doc_cache);
+        let swizzle_items = enhanced_swizzle.as_array().expect("swizzle items array");
+
+        assert!(swizzle_items.iter().any(|i| i["label"] == "x"));
+        assert!(swizzle_items.iter().any(|i| i["label"] == "xy"));
+        assert!(swizzle_items.iter().any(|i| i["label"] == "xyz"));
+        assert!(swizzle_items.iter().any(|i| i["label"] == "xyzw"));
+        // Since user typed 'x', swizzles are filtered to start with 'x' (rgba is filtered out)
+        assert!(!swizzle_items.iter().any(|i| i["label"] == "rgba"));
+
+        // Test swizzle injection on clean dot: myVec.
+        let req_clean_dot = json!({
+            "params": {
+                "textDocument": { "uri": "file:///test.frag" },
+                "position": { "line": 3, "character": 10 }
+            }
+        });
+        let enhanced_clean = enhance_analyzer_completions(&req_clean_dot, json!([]), &doc_cache);
+        let clean_items = enhanced_clean.as_array().expect("clean swizzle items");
+        assert!(clean_items.iter().any(|i| i["label"] == "rgba"));
+        assert!(clean_items.iter().any(|i| i["label"] == "stpq"));
+
+        // 3. Test deduplication
+        let mut seen = HashSet::new();
+        for item in swizzle_items {
+            let lbl = item["label"].as_str().unwrap();
+            assert!(seen.insert(lbl), "Duplicate label in enhanced completions: '{lbl}'");
         }
     }
 }
