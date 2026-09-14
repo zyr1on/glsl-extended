@@ -2,6 +2,16 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.12] - 2026-09-14
+
+### Added
+- **Complete User Variable & Symbol Autocompletion:** Autocomplete now scans and suggests all GLSL variables, including interface qualifiers (`out vec3 FragPos`, `in vec3 aPos`), `uniform` variables (`uniform mat4 model`), `const` definitions (`const float PI`), structs (`struct Material`), `#define` macros, and local variables.
+- **Variable Hover & Goto-Definition:** Hovering on user variables displays their type, qualifiers, and documentation comments. Pressing F12 jumps directly to the line and column of variable definition across current and included files.
+- **Variable Autocompletion Across `#include`:** Variables, structs, and uniforms declared in `#include` header files (e.g. `common.glsl`) appear seamlessly in autocompletion and hover with source file labels.
+- **Dual Language Server Manifest Support:** Re-registered `glsl_analyzer` in `extension.toml` and `src/lib.rs` for optional use, while keeping `glsl_validator` as the default high-performance engine.
+
+---
+
 ## [0.1.11] - 2026-09-14
 
 ### Added

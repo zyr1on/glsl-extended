@@ -19,6 +19,47 @@ const CONTROL_KEYWORDS: &[&str] = &[
     "if", "for", "while", "switch", "catch", "return",
 ];
 
+pub const STORAGE_QUALIFIERS: &[&str] = &[
+    "in", "out", "inout", "uniform", "buffer", "attribute", "varying", "const", "shared",
+    "flat", "smooth", "noperspective", "centroid", "sample", "patch",
+    "coherent", "readonly", "writeonly", "volatile", "restrict",
+    "highp", "mediump", "lowp",
+];
+
+pub const KNOWN_BASE_TYPES: &[&str] = &[
+    "float", "double", "int", "uint", "bool",
+    "vec2", "vec3", "vec4", "dvec2", "dvec3", "dvec4", "bvec2", "bvec3", "bvec4",
+    "ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4",
+    "mat2", "mat3", "mat4", "mat2x2", "mat2x3", "mat2x4",
+    "mat3x2", "mat3x3", "mat3x4", "mat4x2", "mat4x3", "mat4x4",
+    "dmat2", "dmat3", "dmat4", "dmat2x2", "dmat2x3", "dmat2x4",
+    "dmat3x2", "dmat3x3", "dmat3x4", "dmat4x2", "dmat4x3", "dmat4x4",
+    "sampler1D", "sampler2D", "sampler3D", "samplerCube", "sampler2DShadow", "samplerCubeShadow",
+    "sampler2DArray", "sampler2DArrayShadow", "sampler1DArray", "sampler1DArrayShadow",
+    "samplerCubeArray", "samplerCubeArrayShadow", "sampler2DMS", "sampler2DMSArray", "samplerBuffer",
+    "isampler1D", "isampler2D", "isampler3D", "isamplerCube", "isampler2DArray", "isampler1DArray",
+    "isamplerCubeArray", "isampler2DMS", "isampler2DMSArray", "isamplerBuffer",
+    "usampler1D", "usampler2D", "usampler3D", "usamplerCube", "usampler2DArray", "usampler1DArray",
+    "usamplerCubeArray", "usampler2DMS", "usampler2DMSArray", "usamplerBuffer",
+    "image1D", "image2D", "image3D", "imageCube", "image2DArray", "imageCubeArray",
+    "image2DMS", "image2DMSArray", "imageBuffer", "iimage1D", "iimage2D", "iimage3D",
+    "iimageCube", "iimage2DArray", "iimageCubeArray", "iimage2DMS", "iimage2DMSArray", "iimageBuffer",
+    "uimage1D", "uimage2D", "uimage3D", "uimageCube", "uimage2DArray", "uimageCubeArray",
+    "uimage2DMS", "uimage2DMSArray", "uimageBuffer", "atomic_uint",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariableSymbol {
+    pub name: String,
+    pub var_type: String,
+    pub qualifier: String,
+    pub doc: Option<String>,
+    pub source: Option<String>,
+    pub line: usize,
+    pub col: usize,
+    pub file_uri: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
     pub name: String,
@@ -408,9 +449,235 @@ pub fn scan_user_functions(
     results
 }
 
+pub fn is_valid_identifier(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars();
+    let first = chars.next().unwrap();
+    if !first.is_alphabetic() && first != '_' {
+        return false;
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Parses user variable, constant, macro, and struct declarations from GLSL source text.
+pub fn scan_user_variables(
+    text: &str,
+    source_name: Option<&str>,
+    file_uri: Option<&str>,
+) -> Vec<VariableSymbol> {
+    let mut results = Vec::new();
+    let mut pending_doc = Vec::new();
+    let mut custom_types: HashSet<String> = HashSet::new();
+    let mut brace_level: usize = 0;
+
+    for (line_idx, raw_line) in text.lines().enumerate() {
+        let line = raw_line.trim();
+
+        // Comments
+        if line.starts_with("//") {
+            let doc_line = line.trim_start_matches('/').trim();
+            if !doc_line.is_empty() {
+                pending_doc.push(doc_line.to_string());
+            }
+            continue;
+        }
+
+        if line.is_empty() {
+            if brace_level == 0 {
+                pending_doc.clear();
+            }
+            continue;
+        }
+
+        // Preprocessor macros: #define NAME VALUE
+        if let Some(rest) = line.strip_prefix("#define") {
+            let mut it = rest.split_whitespace();
+            if let Some(macro_name_raw) = it.next() {
+                let macro_name = macro_name_raw.split('(').next().unwrap_or(macro_name_raw);
+                if is_valid_identifier(macro_name) {
+                    let col = raw_line.find(macro_name).unwrap_or(0);
+                    let doc_text = if pending_doc.is_empty() { None } else { Some(pending_doc.join(" ")) };
+                    results.push(VariableSymbol {
+                        name: macro_name.to_string(),
+                        var_type: "macro".to_string(),
+                        qualifier: "#define".to_string(),
+                        doc: doc_text,
+                        source: source_name.map(|s| s.to_string()),
+                        line: line_idx,
+                        col,
+                        file_uri: file_uri.map(|s| s.to_string()),
+                    });
+                }
+            }
+            pending_doc.clear();
+            continue;
+        }
+
+        // Struct definitions: struct Name { ... }
+        if let Some(struct_idx) = line.find("struct") {
+            let before = &line[..struct_idx];
+            let after = line[struct_idx + 6..].trim_start();
+            let before_ok = before.is_empty() || before.chars().last().is_none_or(|c| c.is_whitespace());
+            if before_ok {
+                let name_candidate = after.split(|c: char| c.is_whitespace() || c == '{').next().unwrap_or("");
+                if is_valid_identifier(name_candidate) && !INVALID_NAMES.contains(&name_candidate) {
+                    custom_types.insert(name_candidate.to_string());
+                    let col = raw_line.find(name_candidate).unwrap_or(0);
+                    let doc_text = if pending_doc.is_empty() { None } else { Some(pending_doc.join(" ")) };
+                    results.push(VariableSymbol {
+                        name: name_candidate.to_string(),
+                        var_type: "struct".to_string(),
+                        qualifier: "struct".to_string(),
+                        doc: doc_text,
+                        source: source_name.map(|s| s.to_string()),
+                        line: line_idx,
+                        col,
+                        file_uri: file_uri.map(|s| s.to_string()),
+                    });
+                }
+            }
+        }
+
+        // Track braces
+        let mut open_b = 0;
+        let mut close_b = 0;
+        for b in line.bytes() {
+            if b == b'{' { open_b += 1; }
+            else if b == b'}' { close_b += 1; }
+        }
+
+        // Strip layout(...) if present
+        let mut clean = line;
+        if let Some(layout_start) = clean.find("layout") {
+            if let Some(paren_close) = clean[layout_start..].find(')') {
+                clean = clean[layout_start + paren_close + 1..].trim();
+            }
+        }
+
+        // Strip line comments
+        if let Some(c_idx) = clean.find("//") {
+            clean = clean[..c_idx].trim();
+        }
+
+        // Check for variable declaration ending with ';' or '='
+        if !clean.starts_with('#') && (clean.contains(';') || clean.contains('=')) {
+            let stmt = clean.split([';', '=']).next().unwrap_or("").trim();
+            
+            let is_fn = if let Some(p) = stmt.find('(') {
+                p > 0
+            } else {
+                false
+            };
+
+            if !is_fn && !stmt.is_empty() {
+                parse_variable_statement(
+                    stmt,
+                    raw_line,
+                    line_idx,
+                    &pending_doc,
+                    source_name,
+                    file_uri,
+                    &custom_types,
+                    &mut results,
+                );
+            }
+        }
+
+        brace_level = (brace_level + open_b).saturating_sub(close_b);
+        if line.ends_with(';') || line.ends_with('}') {
+            pending_doc.clear();
+        }
+    }
+
+    results
+}
+
+fn parse_variable_statement(
+    stmt: &str,
+    raw_line: &str,
+    line_idx: usize,
+    pending_doc: &[String],
+    source_name: Option<&str>,
+    file_uri: Option<&str>,
+    custom_types: &HashSet<String>,
+    results: &mut Vec<VariableSymbol>,
+) {
+    let tokens: Vec<&str> = stmt.split_whitespace().collect();
+    if tokens.is_empty() {
+        return;
+    }
+
+    let mut qualifier = String::new();
+    let mut var_type = String::new();
+    let mut idents_start_idx = 0;
+
+    for (i, &tok) in tokens.iter().enumerate() {
+        let clean_tok = tok.trim_matches([';', ',', '(', ')']);
+        if STORAGE_QUALIFIERS.contains(&clean_tok) {
+            if qualifier.is_empty() {
+                qualifier = clean_tok.to_string();
+            } else {
+                qualifier.push(' ');
+                qualifier.push_str(clean_tok);
+            }
+        } else if KNOWN_BASE_TYPES.contains(&clean_tok)
+            || custom_types.contains(clean_tok)
+            || (!qualifier.is_empty() && var_type.is_empty() && is_valid_identifier(clean_tok))
+        {
+            var_type = clean_tok.to_string();
+            idents_start_idx = i + 1;
+            break;
+        } else if qualifier.is_empty() && i == 0 {
+            if KNOWN_BASE_TYPES.contains(&clean_tok) || custom_types.contains(clean_tok) {
+                var_type = clean_tok.to_string();
+                idents_start_idx = 1;
+                break;
+            } else {
+                return;
+            }
+        }
+    }
+
+    if var_type.is_empty() || idents_start_idx >= tokens.len() {
+        return;
+    }
+
+    if qualifier.is_empty() {
+        qualifier = "var".to_string();
+    }
+
+    let idents_slice = &tokens[idents_start_idx..];
+    let remaining = idents_slice.join(" ");
+    let doc_text = if pending_doc.is_empty() { None } else { Some(pending_doc.join(" ")) };
+
+    for part in remaining.split(',') {
+        let part_trimmed = part.trim();
+        let var_name = part_trimmed
+            .split(|c: char| c == '[' || c == ';' || c == '=' || c.is_whitespace())
+            .next()
+            .unwrap_or("");
+        if is_valid_identifier(var_name) && !INVALID_NAMES.contains(&var_name) && !INVALID_TYPES.contains(&var_name) {
+            let col = raw_line.find(var_name).unwrap_or(0);
+            results.push(VariableSymbol {
+                name: var_name.to_string(),
+                var_type: var_type.clone(),
+                qualifier: qualifier.clone(),
+                doc: doc_text.clone(),
+                source: source_name.map(|s| s.to_string()),
+                line: line_idx,
+                col,
+                file_uri: file_uri.map(|s| s.to_string()),
+            });
+        }
+    }
+}
+
 struct CacheEntry {
     mtime: SystemTime,
     functions: Vec<FunctionSignature>,
+    variables: Vec<VariableSymbol>,
 }
 
 static INCLUDE_CACHE: OnceLock<Mutex<HashMap<PathBuf, CacheEntry>>> = OnceLock::new();
@@ -423,7 +690,8 @@ fn scan_included_file(
     candidate: &Path,
     source_label: &str,
     doc_cache: &HashMap<String, String>,
-    all_functions: &mut Vec<FunctionSignature>,
+    mut all_functions: Option<&mut Vec<FunctionSignature>>,
+    mut all_variables: Option<&mut Vec<VariableSymbol>>,
     visited: &mut HashSet<PathBuf>,
     depth: usize,
 ) {
@@ -435,11 +703,17 @@ fn scan_included_file(
     let clean_path = candidate.to_string_lossy().replace('\\', "/");
     let candidate_uri = format!("file:///{}", clean_path.trim_start_matches('/'));
     if let Some(live_text) = doc_cache.get(&candidate_uri) {
-        let funcs = scan_user_functions(live_text, Some(source_label), Some(&candidate_uri));
-        all_functions.extend(funcs);
+        if let Some(ref mut funcs_out) = all_functions {
+            let funcs = scan_user_functions(live_text, Some(source_label), Some(&candidate_uri));
+            funcs_out.extend(funcs);
+        }
+        if let Some(ref mut vars_out) = all_variables {
+            let vars = scan_user_variables(live_text, Some(source_label), Some(&candidate_uri));
+            vars_out.extend(vars);
+        }
 
         if let Some(parent_dir) = candidate.parent() {
-            scan_includes_in_text(live_text, parent_dir, doc_cache, all_functions, visited, depth + 1);
+            scan_includes_in_text(live_text, parent_dir, doc_cache, all_functions, all_variables, visited, depth + 1);
         }
         return;
     }
@@ -458,7 +732,7 @@ fn scan_included_file(
             if let Ok(cache) = get_include_cache().lock() {
                 cache.get(candidate).and_then(|entry| {
                     if entry.mtime == mt {
-                        Some(entry.functions.clone())
+                        Some((entry.functions.clone(), entry.variables.clone()))
                     } else {
                         None
                     }
@@ -468,8 +742,13 @@ fn scan_included_file(
             }
         };
 
-        if let Some(funcs) = cached {
-            all_functions.extend(funcs);
+        if let Some((funcs, vars)) = cached {
+            if let Some(ref mut funcs_out) = all_functions {
+                funcs_out.extend(funcs);
+            }
+            if let Some(ref mut vars_out) = all_variables {
+                vars_out.extend(vars);
+            }
             return;
         }
 
@@ -477,6 +756,7 @@ fn scan_included_file(
         if let Ok(disk_text) = std::fs::read_to_string(candidate) {
             let candidate_uri = path_to_uri(candidate);
             let funcs = scan_user_functions(&disk_text, Some(source_label), Some(&candidate_uri));
+            let vars = scan_user_variables(&disk_text, Some(source_label), Some(&candidate_uri));
             if let Ok(mut cache) = get_include_cache().lock() {
                 if cache.len() > 64 {
                     cache.clear();
@@ -484,12 +764,18 @@ fn scan_included_file(
                 cache.insert(candidate.to_path_buf(), CacheEntry {
                     mtime: mt,
                     functions: funcs.clone(),
+                    variables: vars.clone(),
                 });
             }
-            all_functions.extend(funcs);
+            if let Some(ref mut funcs_out) = all_functions {
+                funcs_out.extend(funcs);
+            }
+            if let Some(ref mut vars_out) = all_variables {
+                vars_out.extend(vars);
+            }
 
             if let Some(parent_dir) = candidate.parent() {
-                scan_includes_in_text(&disk_text, parent_dir, doc_cache, all_functions, visited, depth + 1);
+                scan_includes_in_text(&disk_text, parent_dir, doc_cache, all_functions, all_variables, visited, depth + 1);
             }
         }
     }
@@ -499,7 +785,8 @@ fn scan_includes_in_text(
     text: &str,
     base_dir: &Path,
     doc_cache: &HashMap<String, String>,
-    all_functions: &mut Vec<FunctionSignature>,
+    mut all_functions: Option<&mut Vec<FunctionSignature>>,
+    mut all_variables: Option<&mut Vec<VariableSymbol>>,
     visited: &mut HashSet<PathBuf>,
     depth: usize,
 ) {
@@ -521,11 +808,15 @@ fn scan_includes_in_text(
                 .and_then(|n| n.to_str())
                 .unwrap_or(include_target);
 
+            let funcs_arg = all_functions.as_deref_mut();
+            let vars_arg = all_variables.as_deref_mut();
+
             scan_included_file(
                 &candidate,
                 source_label,
                 doc_cache,
-                all_functions,
+                funcs_arg,
+                vars_arg,
                 visited,
                 depth,
             );
@@ -543,10 +834,26 @@ pub fn resolve_includes_and_scan(
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
     if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
-        scan_includes_in_text(text, &base_dir, doc_cache, &mut all_functions, &mut visited, 1);
+        scan_includes_in_text(text, &base_dir, doc_cache, Some(&mut all_functions), None, &mut visited, 1);
     }
 
     all_functions
+}
+
+/// Resolves #include directives and aggregates variable and symbol declarations with mtime caching.
+pub fn resolve_includes_and_scan_variables(
+    uri: &str,
+    text: &str,
+    doc_cache: &HashMap<String, String>,
+) -> Vec<VariableSymbol> {
+    let mut all_variables = scan_user_variables(text, None, Some(uri));
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+
+    if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
+        scan_includes_in_text(text, &base_dir, doc_cache, None, Some(&mut all_variables), &mut visited, 1);
+    }
+
+    all_variables
 }
 
 /// Handles textDocument/signatureHelp requests.
@@ -758,6 +1065,32 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         });
     }
 
+    // 3. User-defined variables / symbols
+    let user_vars = resolve_includes_and_scan_variables(uri, doc, doc_cache);
+    if let Some(var) = user_vars.iter().find(|v| v.name == word) {
+        let doc_text = var.doc.as_deref().unwrap_or("");
+        let source_info = match &var.source {
+            Some(src) => format!("*Defined in `{src}`*\n\n"),
+            None => String::new(),
+        };
+
+        let markdown = format!(
+            "```glsl\n{} {} {}\n```\n\n{}{}",
+            var.qualifier,
+            var.var_type,
+            var.name,
+            source_info,
+            doc_text
+        );
+
+        return json!({
+            "contents": {
+                "kind": "markdown",
+                "value": markdown.trim_end()
+            }
+        });
+    }
+
     json!(null)
 }
 
@@ -818,6 +1151,19 @@ pub fn handle_definition(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                 "range": {
                     "start": { "line": func.line, "character": func.col },
                     "end": { "line": func.line, "character": func.col + func.name.len() }
+                }
+            });
+        }
+    }
+
+    let user_vars = resolve_includes_and_scan_variables(uri, doc, doc_cache);
+    if let Some(var) = user_vars.iter().find(|v| v.name == word) {
+        if let Some(target_uri) = &var.file_uri {
+            return json!({
+                "uri": target_uri,
+                "range": {
+                    "start": { "line": var.line, "character": var.col },
+                    "end": { "line": var.line, "character": var.col + var.name.len() }
                 }
             });
         }
@@ -1012,5 +1358,63 @@ vec3 b = "string literal";
         let res = handle_definition(&req, &doc_cache);
         assert_eq!(res["uri"], uri);
         assert_eq!(res["range"]["start"]["line"], 0);
+    }
+
+    #[test]
+    fn test_scan_user_variables() {
+        let code = r#"
+#version 460 core
+layout(location = 0) in vec3 aPos;
+// Fragment position in world space
+out vec3 FragPos;
+uniform mat4 model, view, projection;
+const float PI = 3.14159;
+#define NR_LIGHTS 4
+struct Material {
+    vec3 ambient;
+};
+void main() {
+    vec3 norm = normalize(aPos);
+}
+"#;
+        let vars = scan_user_variables(code, None, Some("file:///shader.frag"));
+        assert!(vars.iter().any(|v| v.name == "aPos" && v.var_type == "vec3" && v.qualifier == "in"));
+        assert!(vars.iter().any(|v| v.name == "FragPos" && v.var_type == "vec3" && v.qualifier == "out" && v.doc.as_ref().unwrap().contains("Fragment position")));
+        assert!(vars.iter().any(|v| v.name == "model" && v.var_type == "mat4" && v.qualifier == "uniform"));
+        assert!(vars.iter().any(|v| v.name == "view" && v.var_type == "mat4" && v.qualifier == "uniform"));
+        assert!(vars.iter().any(|v| v.name == "projection" && v.var_type == "mat4" && v.qualifier == "uniform"));
+        assert!(vars.iter().any(|v| v.name == "PI" && v.var_type == "float" && v.qualifier == "const"));
+        assert!(vars.iter().any(|v| v.name == "NR_LIGHTS" && v.qualifier == "#define"));
+        assert!(vars.iter().any(|v| v.name == "Material" && v.qualifier == "struct"));
+        assert!(vars.iter().any(|v| v.name == "norm" && v.var_type == "vec3"));
+    }
+
+    #[test]
+    fn test_variable_hover_and_definition() {
+        let mut doc_cache = HashMap::new();
+        let uri = "file:///shader.frag";
+        let code = "out vec3 FragPos;\nvoid main() { vec3 p = FragPos; }";
+        doc_cache.insert(uri.to_string(), code.to_string());
+
+        // Hover test
+        let hover_req = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": 24 } // hovering on FragPos
+            }
+        });
+        let hover_res = handle_hover(&hover_req, &doc_cache);
+        assert!(hover_res["contents"]["value"].as_str().unwrap().contains("out vec3 FragPos"));
+
+        // Definition test
+        let def_req = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": 24 } // F12 on FragPos
+            }
+        });
+        let def_res = handle_definition(&def_req, &doc_cache);
+        assert_eq!(def_res["uri"], uri);
+        assert_eq!(def_res["range"]["start"]["line"], 0);
     }
 }

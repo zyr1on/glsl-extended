@@ -1130,7 +1130,48 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         "end": { "line": line_idx, "character": word_end }
     });
 
-    // 2. User functions from current file and recursively included files (#include)
+    // 2. User variables & symbols from current file and recursively included files (#include)
+    let user_vars = signature::resolve_includes_and_scan_variables(uri, doc, doc_cache);
+    for var in user_vars {
+        if word.is_empty() || starts_with_ignore_ascii_case(&var.name, word) {
+            if items.iter().any(|it| it["label"] == var.name) {
+                continue;
+            }
+
+            let kind = match var.qualifier.as_str() {
+                "struct" => 22, // Struct
+                "const" | "#define" => 21, // Constant
+                _ => 6, // Variable
+            };
+
+            let detail = format!("{} {}", var.qualifier, var.var_type);
+            let doc_text = match (&var.source, &var.doc) {
+                (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
+                (Some(src), None) => format!("*Defined in `{src}`*"),
+                (None, Some(d)) => d.clone(),
+                (None, None) => String::new(),
+            };
+
+            items.push(json!({
+                "label": var.name,
+                "kind": kind,
+                "detail": detail,
+                "documentation": {
+                    "kind": "markdown",
+                    "value": doc_text,
+                },
+                "insertText": var.name,
+                "insertTextFormat": 1,
+                "textEdit": {
+                    "range": replace_range,
+                    "newText": var.name
+                },
+                "sortText": format!("00_{}", var.name),
+            }));
+        }
+    }
+
+    // 3. User functions from current file and recursively included files (#include)
     let user_funcs = signature::resolve_includes_and_scan(uri, doc, doc_cache);
     for func in user_funcs {
         if word.is_empty() || starts_with_ignore_ascii_case(&func.name, word) {
@@ -2552,5 +2593,29 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
         assert!(header.contains("#version 330 core"), "Must inherit #version 330 core from parent main.vert: {header}");
         assert!(header.contains("#extension GL_ARB_explicit_attrib_location : enable"), "Must inherit extensions: {header}");
         assert!(header.ends_with("#line 1\n"), "Must reset line counter with #line 1: {header}");
+    }
+
+    #[test]
+    fn test_completion_user_variables() {
+        let mut doc_cache = HashMap::new();
+        let uri = "file:///shader.frag";
+        let code = "out vec3 FragPos;\nuniform mat4 model;\nvoid main() { Fra";
+        doc_cache.insert(uri.to_string(), code.to_string());
+
+        let req = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 2, "character": 17 } // After "Fra"
+            }
+        });
+        let res = handle_completion(&req, &doc_cache);
+        let items = res.as_array().expect("items");
+        let frag_item = items.iter().find(|it| it["label"] == "FragPos");
+        assert!(frag_item.is_some(), "FragPos must be suggested in completion");
+        let item = frag_item.unwrap();
+        assert_eq!(item["kind"], 6); // Variable
+        assert_eq!(item["detail"], "out vec3");
+        assert_eq!(item["insertText"], "FragPos");
+        assert_eq!(item["insertTextFormat"], 1);
     }
 }
