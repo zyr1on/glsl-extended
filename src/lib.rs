@@ -148,7 +148,6 @@ impl GlslExtendedExtension {
         // 4) Common fallback locations per platform
         let fallbacks: &[&str] = match platform {
             zed::Os::Windows => &[
-                "C:\\Users\\Semih\\.cargo\\bin\\glsl_validator.exe",
                 "C:\\msys64\\ucrt64\\bin\\glsl_validator.exe",
                 "C:\\msys64\\mingw64\\bin\\glsl_validator.exe",
                 "C:\\msys64\\clang64\\bin\\glsl_validator.exe",
