@@ -2,6 +2,14 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.16] - 2026-09-14
+
+### Performance
+- **Zero-Copy LSP Request Handling:** Replaced document cache cloning (`m.clone()`) across all language server handlers (`completion`, `signatureHelp`, `hover`, `definition`, `colorPresentation`, and background diagnostics worker) with direct borrowing. Eliminates redundant heap allocations and full-text copies on every keystroke.
+- **Link-Time Optimization (LTO) & Binary Stripping:** Configured release profile with `lto = true`, `codegen-units = 1`, `strip = true`, and `panic = "abort"`, shrinking the standalone `glsl_validator` binary to under 800 KB and optimizing cross-crate inlining.
+
+---
+
 ## [0.1.15] - 2026-09-14
 
 ### Fixed
