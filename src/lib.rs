@@ -280,7 +280,17 @@ impl GlslExtendedExtension {
                 require_assets: true,
                 pre_release: false,
             },
-        ) && let Some(asset) = release.assets.iter().find(|a| a.name == asset_name)
+        ) && let Some(asset) = release
+            .assets
+            .iter()
+            .find(|a| a.name == asset_name)
+            .or_else(|| {
+                if matches!((platform, arch), (zed::Os::Windows, zed::Architecture::Aarch64)) {
+                    release.assets.iter().find(|a| a.name == "glsl_validator-x86_64-windows.zip")
+                } else {
+                    None
+                }
+            })
         {
             let version_dir = format!("glsl_validator-{}", release.version);
             let candidate_root = format!("{version_dir}/glsl_validator{exe}");
@@ -514,11 +524,6 @@ impl zed::Extension for GlslExtendedExtension {
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
         match language_server_id.as_ref() {
-            "glsl_analyzer" => Ok(zed::Command {
-                command: self.find_glsl_analyzer(language_server_id, worktree)?,
-                args: vec![],
-                env: Default::default(),
-            }),
             "glsl_validator" => {
                 let validator = self.find_glsl_validator(language_server_id, worktree)?;
                 let mut env = Vec::new();
@@ -572,13 +577,6 @@ impl zed::Extension for GlslExtendedExtension {
             return Ok(Some(opts));
         }
 
-        if server_name == "glsl_analyzer" {
-            return Ok(Some(serde_json::json!({
-                "validateOnType": true,
-                "maxNumberOfProblems": 200,
-                "targetClientVersion": "opengl460"
-            })));
-        }
 
         Ok(None)
     }

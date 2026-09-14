@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{ChildStdin, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -14,6 +14,7 @@ use crate::log;
 
 pub struct AnalyzerBridge {
     stdin: Mutex<ChildStdin>,
+    child: Mutex<Child>,
     pending_requests: Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>,
     next_id: AtomicU64,
     is_alive: Arc<AtomicBool>,
@@ -96,6 +97,7 @@ impl AnalyzerBridge {
 
         Some(Self {
             stdin: Mutex::new(stdin),
+            child: Mutex::new(child),
             pending_requests,
             next_id: AtomicU64::new(1000),
             is_alive,
@@ -151,6 +153,20 @@ impl AnalyzerBridge {
 
         let resp = rx.recv_timeout(timeout).ok()?;
         resp.get("result").cloned()
+    }
+}
+
+impl Drop for AnalyzerBridge {
+    fn drop(&mut self) {
+        // Send LSP shutdown + exit before marking dead
+        let _ = self.send_request("shutdown", json!(null), Duration::from_millis(500));
+        self.send_notification("exit", json!(null));
+        self.is_alive.store(false, Ordering::Relaxed);
+        // Force kill if still running
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

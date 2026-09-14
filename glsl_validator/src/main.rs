@@ -705,6 +705,9 @@ fn resolve_glsl_version_header(
 
     let save_cache = |hdr: String| -> Option<String> {
         if let Ok(mut lock) = VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+            if lock.len() > 64 {
+                lock.clear();
+            }
             lock.insert(uri.to_string(), hdr.clone());
         }
         Some(hdr)
@@ -1022,7 +1025,25 @@ fn validate_shader(
     diagnostics
 }
 
-pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
+#[inline]
+pub fn parse_vector_dimension(type_name: &str) -> Option<usize> {
+    let mut clean = type_name.trim();
+    if clean.ends_with(']') {
+        if let Some(bracket_idx) = clean.find('[') {
+            clean = clean[..bracket_idx].trim_end();
+        }
+    }
+    let last_word = clean.split_whitespace().last().unwrap_or(clean);
+    let lower = last_word.to_ascii_lowercase();
+    match lower.as_str() {
+        "vec4" | "ivec4" | "uvec4" | "dvec4" | "bvec4" => Some(4),
+        "vec3" | "ivec3" | "uvec3" | "dvec3" | "bvec3" => Some(3),
+        "vec2" | "ivec2" | "uvec2" | "dvec2" | "bvec2" => Some(2),
+        _ => None,
+    }
+}
+
+pub fn infer_vector_dimension(doc: &str, expr: &str) -> Option<usize> {
     infer_vector_dimension_from_vars(&[], doc, expr)
 }
 
@@ -1030,52 +1051,80 @@ pub fn infer_vector_dimension_from_vars(
     vars: &[signature::VariableSymbol],
     doc: &str,
     expr: &str,
-) -> usize {
+) -> Option<usize> {
     let clean = expr.trim();
+    if clean.is_empty() {
+        return None;
+    }
+
     let segments: Vec<&str> = clean.split('.').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
-        return 4;
+        return None;
     }
 
-    let last = match segments.last() {
-        Some(l) => *l,
-        None => return 4,
-    };
+    if segments.len() == 1 {
+        let first = segments[0];
 
-    // 0. Check parsed variables from document and #include files
-    for var in vars {
-        if var.name == last {
-            let vt = var.var_type.to_lowercase();
-            if vt.contains("vec4") {
-                return 4;
-            } else if vt.contains("vec3") {
-                return 3;
-            } else if vt.contains("vec2") {
-                return 2;
+        // 1. Check parsed variables from document and #include files
+        if let Some(var) = vars.iter().find(|v| v.name == first) {
+            if let Some(dim) = parse_vector_dimension(&var.var_type) {
+                return Some(dim);
+            }
+            // If variable is known and its type is NOT a vector (e.g. "Material", "float", "int", "mat4"):
+            // It is definitively not a vector. Return None!
+            return None;
+        }
+
+        // 2. Built-in GLSL vector variables
+        match first {
+            "gl_Position" | "gl_FragCoord" | "gl_FragColor" | "gl_Vertex" | "gl_Color" => return Some(4),
+            "gl_Normal" | "gl_GlobalInvocationID" | "gl_LocalInvocationID" | "gl_WorkGroupID" => return Some(3),
+            "gl_PointCoord" => return Some(2),
+            _ => {}
+        }
+
+        // 3. Scan document for variable declaration `Type first;`
+        for line in doc.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                continue;
+            }
+
+            if let Some(idx) = line.find(first) {
+                let before = &line[..idx];
+                let after = &line[idx + first.len()..];
+                let before_ok = before
+                    .chars()
+                    .last()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+                let after_ok = after
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+
+                if before_ok && after_ok {
+                    let type_token = before.split_whitespace().last().unwrap_or("");
+                    if let Some(dim) = parse_vector_dimension(type_token) {
+                        return Some(dim);
+                    }
+                    if !type_token.is_empty() {
+                        return None;
+                    }
+                }
             }
         }
+
+        return None;
     }
 
-    // 1. If `last` is already a swizzle (e.g. `pos.xyz.` or `a.xy.`)
-    if last.len() >= 2 && last.chars().all(|c| "xyzwrgbastpq".contains(c)) {
-        return match last.len() {
-            2 => 2,
-            3 => 3,
-            _ => 4,
-        };
+    let last = segments[segments.len() - 1];
+
+    // 1. If `last` is already a swizzle on a vector of length 2..=4 (e.g. `pos.xyz` -> 3)
+    if last.len() >= 2 && last.len() <= 4 && last.chars().all(|c| "xyzwrgbastpq".contains(c)) {
+        return Some(last.len());
     }
 
-    // 2. Built-in GLSL vector variables
-    match last {
-        "gl_Position" | "gl_FragCoord" | "gl_FragColor" | "gl_Vertex" | "gl_Color" => return 4,
-        "gl_Normal" | "gl_GlobalInvocationID" | "gl_LocalInvocationID" | "gl_WorkGroupID" => {
-            return 3
-        }
-        "gl_PointCoord" => return 2,
-        _ => {}
-    }
-
-    // 3. Scan document for variable or struct member declaration
+    // 2. Scan document for struct member declaration (e.g. `vec4 test;` inside a struct)
     for line in doc.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
@@ -1095,26 +1144,161 @@ pub fn infer_vector_dimension_from_vars(
                 .is_none_or(|c| !c.is_alphanumeric() && c != '_');
 
             if before_ok && after_ok {
-                if before.contains("vec4") {
-                    return 4;
-                } else if before.contains("vec3") {
-                    return 3;
-                } else if before.contains("vec2") {
-                    return 2;
+                let type_token = before.split_whitespace().last().unwrap_or("");
+                if let Some(dim) = parse_vector_dimension(type_token) {
+                    return Some(dim);
+                }
+                if !type_token.is_empty() {
+                    return None;
                 }
             }
         }
     }
 
-    // 4. Heuristics from identifier name
-    let lower = last.to_lowercase();
-    if lower.contains("uv") || lower.contains("coord2d") {
-        2
-    } else if lower.contains("normal") || lower.contains("dir") || lower.contains("vel") {
-        3
-    } else {
-        4
+    None
+}
+
+pub fn extract_struct_members(
+    vars: &[signature::VariableSymbol],
+    doc: &str,
+    doc_cache: &HashMap<String, String>,
+    expr: &str,
+) -> Vec<(String, String)> {
+    let clean = expr.trim();
+    let segments: Vec<&str> = clean.split('.').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return Vec::new();
     }
+
+    let first = segments[0];
+
+    // Find the type of `first`
+    let mut current_type: Option<String> = None;
+    if let Some(v) = vars.iter().find(|v| v.name == first) {
+        current_type = Some(v.var_type.clone());
+    } else {
+        for line in doc.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                continue;
+            }
+            if let Some(idx) = line.find(first) {
+                let before = &line[..idx];
+                let after = &line[idx + first.len()..];
+                let before_ok = before
+                    .chars()
+                    .last()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+                let after_ok = after
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+                if before_ok && after_ok {
+                    let type_token = before.split_whitespace().last().unwrap_or("");
+                    if !type_token.is_empty() {
+                        current_type = Some(type_token.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut target_type = match current_type {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    // If multi-segment (e.g. o.inner.field), drill down struct fields
+    for &sub_seg in &segments[1..] {
+        let fields = find_fields_in_struct(&target_type, doc, doc_cache);
+        if let Some((_, f_type)) = fields.into_iter().find(|(name, _)| name == sub_seg) {
+            target_type = f_type;
+        } else {
+            return Vec::new();
+        }
+    }
+
+    find_fields_in_struct(&target_type, doc, doc_cache)
+}
+
+fn find_fields_in_struct(
+    struct_name: &str,
+    doc: &str,
+    doc_cache: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let fields = parse_fields_from_text(struct_name, doc);
+    if !fields.is_empty() {
+        return fields;
+    }
+
+    // Search doc_cache (included files)
+    for text in doc_cache.values() {
+        let fields = parse_fields_from_text(struct_name, text);
+        if !fields.is_empty() {
+            return fields;
+        }
+    }
+
+    Vec::new()
+}
+
+fn parse_fields_from_text(struct_name: &str, text: &str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    let pattern = format!("struct {struct_name}");
+
+    let mut inside = false;
+    let mut brace_depth: usize = 0;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+
+        if !inside {
+            if let Some(pos) = line.find(&pattern) {
+                let after = &line[pos + pattern.len()..];
+                let next_char = after.chars().next();
+                if next_char.is_none_or(|c| c.is_whitespace() || c == '{') {
+                    inside = true;
+                    brace_depth = 0;
+                }
+            }
+        }
+
+        if inside {
+            for b in trimmed.bytes() {
+                if b == b'{' {
+                    brace_depth += 1;
+                } else if b == b'}' {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    if brace_depth == 0 {
+                        return results;
+                    }
+                }
+            }
+
+            if brace_depth >= 1 && trimmed.ends_with(';') {
+                let stmt = trimmed.trim_end_matches(';').trim();
+                let tokens: Vec<&str> = stmt.split_whitespace().collect();
+                if tokens.len() >= 2 {
+                    let field_type = tokens[tokens.len() - 2];
+                    let field_name_raw = tokens[tokens.len() - 1];
+                    let field_name = field_name_raw
+                        .trim_matches(['[', ']'])
+                        .split('[')
+                        .next()
+                        .unwrap_or(field_name_raw);
+                    if signature::is_valid_identifier(field_name) {
+                        results.push((field_name.to_string(), field_type.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    results
 }
 
 pub fn generate_swizzle_completions(dim: usize) -> Vec<Value> {
@@ -1262,83 +1446,83 @@ pub fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
     s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
 }
 
-pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
-    let snippets = [
-        (
-            "ubo",
-            "Uniform Buffer Object (Generic)",
-            "layout(std140, binding = ${1:0}) uniform ${2:BlockName} {\n\t$0\n};",
-            "Generic Uniform Buffer Object (UBO) declaration",
-        ),
-        (
-            "ubo-vk",
-            "Uniform Buffer Object (Vulkan)",
-            "layout(set = ${1:0}, binding = ${2:0}) uniform ${3:BlockName} {\n\t$0\n} ${4:ubo};",
-            "Vulkan Uniform Buffer Object with set and binding",
-        ),
-        (
-            "ssbo",
-            "Shader Storage Buffer Object (Generic)",
-            "layout(std430, binding = ${1:0}) buffer ${2:BlockName} {\n\t$0\n};",
-            "Generic Shader Storage Buffer Object (SSBO) declaration",
-        ),
-        (
-            "vert",
-            "Vertex Shader Skeleton (OpenGL)",
-            "#version 460 core\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
-            "Clean OpenGL GLSL Vertex Shader template",
-        ),
-        (
-            "vert-vk",
-            "Vertex Shader Skeleton (Vulkan)",
-            "#version 460\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
-            "Clean Vulkan GLSL Vertex Shader template",
-        ),
-        (
-            "frag",
-            "Fragment Shader Skeleton (OpenGL)",
-            "#version 460 core\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
-            "Clean OpenGL GLSL Fragment Shader template",
-        ),
-        (
-            "frag-vk",
-            "Fragment Shader Skeleton (Vulkan)",
-            "#version 460\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
-            "Clean Vulkan GLSL Fragment Shader template",
-        ),
-        (
-            "comp",
-            "Compute Shader Skeleton",
-            "#version 460 core\n\nlayout(local_size_x = ${1:16}, local_size_y = ${2:16}, local_size_z = ${3:1}) in;\n\nvoid main() {\n\t$0\n}\n",
-            "Clean GLSL Compute Shader template",
-        ),
-        (
-            "geom",
-            "Geometry Shader Skeleton",
-            "#version 460 core\n\nlayout(${1:triangles}) in;\nlayout(${2:triangle_strip}, max_vertices = ${3:3}) out;\n\nvoid main() {\n\tfor (int i = 0; i < gl_in.length(); i++) {\n\t\tgl_Position = gl_in[i].gl_Position;\n\t\tEmitVertex();\n\t}\n\tEndPrimitive();\n}\n",
-            "Clean GLSL Geometry Shader template",
-        ),
-        (
-            "struct",
-            "Struct Definition",
-            "struct ${1:Name} {\n\t$0\n};",
-            "GLSL Struct definition",
-        ),
-        (
-            "func",
-            "Function Definition",
-            "${1:void} ${2:funcName}(${3}) {\n\t$0\n}",
-            "GLSL Function definition",
-        ),
-        (
-            "main",
-            "Main Function",
-            "void main() {\n\t$0\n}",
-            "GLSL void main() function",
-        ),
-    ];
+static GLSL_SNIPPETS: &[(&str, &str, &str, &str)] = &[
+    (
+        "ubo",
+        "Uniform Buffer Object (Generic)",
+        "layout(std140, binding = ${1:0}) uniform ${2:BlockName} {\n\t$0\n};",
+        "Generic Uniform Buffer Object (UBO) declaration",
+    ),
+    (
+        "ubo-vk",
+        "Uniform Buffer Object (Vulkan)",
+        "layout(set = ${1:0}, binding = ${2:0}) uniform ${3:BlockName} {\n\t$0\n} ${4:ubo};",
+        "Vulkan Uniform Buffer Object with set and binding",
+    ),
+    (
+        "ssbo",
+        "Shader Storage Buffer Object (Generic)",
+        "layout(std430, binding = ${1:0}) buffer ${2:BlockName} {\n\t$0\n};",
+        "Generic Shader Storage Buffer Object (SSBO) declaration",
+    ),
+    (
+        "vert",
+        "Vertex Shader Skeleton (OpenGL)",
+        "#version 460 core\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
+        "Clean OpenGL GLSL Vertex Shader template",
+    ),
+    (
+        "vert-vk",
+        "Vertex Shader Skeleton (Vulkan)",
+        "#version 460\n\nlayout(location = 0) in vec3 inPosition;\n\nvoid main() {\n\tgl_Position = vec4(inPosition, 1.0);\n}\n",
+        "Clean Vulkan GLSL Vertex Shader template",
+    ),
+    (
+        "frag",
+        "Fragment Shader Skeleton (OpenGL)",
+        "#version 460 core\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
+        "Clean OpenGL GLSL Fragment Shader template",
+    ),
+    (
+        "frag-vk",
+        "Fragment Shader Skeleton (Vulkan)",
+        "#version 460\n\nlayout(location = 0) out vec4 fragColor;\n\nvoid main() {\n\tfragColor = vec4(1.0);\n}\n",
+        "Clean Vulkan GLSL Fragment Shader template",
+    ),
+    (
+        "comp",
+        "Compute Shader Skeleton",
+        "#version 460 core\n\nlayout(local_size_x = ${1:16}, local_size_y = ${2:16}, local_size_z = ${3:1}) in;\n\nvoid main() {\n\t$0\n}\n",
+        "Clean GLSL Compute Shader template",
+    ),
+    (
+        "geom",
+        "Geometry Shader Skeleton",
+        "#version 460 core\n\nlayout(${1:triangles}) in;\nlayout(${2:triangle_strip}, max_vertices = ${3:3}) out;\n\nvoid main() {\n\tfor (int i = 0; i < gl_in.length(); i++) {\n\t\tgl_Position = gl_in[i].gl_Position;\n\t\tEmitVertex();\n\t}\n\tEndPrimitive();\n}\n",
+        "Clean GLSL Geometry Shader template",
+    ),
+    (
+        "struct",
+        "Struct Definition",
+        "struct ${1:Name} {\n\t$0\n};",
+        "GLSL Struct definition",
+    ),
+    (
+        "func",
+        "Function Definition",
+        "${1:void} ${2:funcName}(${3}) {\n\t$0\n}",
+        "GLSL Function definition",
+    ),
+    (
+        "main",
+        "Main Function",
+        "void main() {\n\t$0\n}",
+        "GLSL void main() function",
+    ),
+];
 
-    snippets
+pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
+    GLSL_SNIPPETS
         .iter()
         .filter(|(prefix, _, _, _)| {
             query.is_empty() || starts_with_ignore_ascii_case(prefix, query)
@@ -1355,6 +1539,74 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+pub fn detect_dot_access(prefix: &str) -> (bool, &str, &str, usize) {
+    let trimmed = prefix.trim_end();
+    if let Some(stripped) = trimmed.strip_suffix('.') {
+        let before_dot = stripped.trim_end();
+        let mut start = before_dot.len();
+        for (i, c) in before_dot.char_indices().rev() {
+            if c.is_alphanumeric() || c == '_' || c == '.' {
+                start = i;
+            } else {
+                break;
+            }
+        }
+        let expr = &before_dot[start..];
+        (true, expr, "", stripped.len())
+    } else {
+        let mut w_start = prefix.len();
+        for (i, c) in prefix.char_indices().rev() {
+            if c.is_alphanumeric() || c == '_' {
+                w_start = i;
+            } else {
+                break;
+            }
+        }
+        let w = &prefix[w_start..];
+        let before_word = prefix[..w_start].trim_end();
+        if let Some(stripped) = before_word.strip_suffix('.') {
+            let before_dot = stripped.trim_end();
+            let mut start = before_dot.len();
+            for (i, c) in before_dot.char_indices().rev() {
+                if c.is_alphanumeric() || c == '_' || c == '.' {
+                    start = i;
+                } else {
+                    break;
+                }
+            }
+            let expr = &before_dot[start..];
+            (true, expr, w, stripped.len())
+        } else {
+            (false, "", "", 0)
+        }
+    }
+}
+
+pub fn extract_word_prefix(prefix: &str) -> (usize, &str) {
+    let mut word_start = prefix.len();
+    for (i, c) in prefix.char_indices().rev() {
+        if c.is_alphanumeric() || c == '_' {
+            word_start = i;
+        } else {
+            break;
+        }
+    }
+    (word_start, &prefix[word_start..])
+}
+
+pub fn check_following_paren(line: &str, safe_col: usize) -> (usize, bool) {
+    let mut word_end = safe_col;
+    for (i, c) in line[safe_col..].char_indices() {
+        if c.is_alphanumeric() || c == '_' {
+            word_end = safe_col + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let has_paren = line[word_end..].trim_start().starts_with('(');
+    (word_end, has_paren)
 }
 
 pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
@@ -1398,102 +1650,66 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
 
     // Detect if cursor is after a dot (e.g. `testColor.` or `testColor.x`)
-    let (is_dot_access, expr_before_dot, member_word, dot_col) = {
-        let trimmed = prefix.trim_end();
-        if let Some(stripped) = trimmed.strip_suffix('.') {
-            // Case 1: Cursor immediately after dot: `testColor.`
-            let before_dot = stripped.trim_end();
-            let mut start = before_dot.len();
-            for (i, c) in before_dot.char_indices().rev() {
-                if c.is_alphanumeric() || c == '_' || c == '.' {
-                    start = i;
-                } else {
-                    break;
-                }
-            }
-            let expr = &before_dot[start..];
-            (true, expr, "", stripped.len())
-        } else {
-            // Case 2: Cursor while typing swizzle: `testColor.x`
-            let mut word_start = prefix.len();
-            for (i, c) in prefix.char_indices().rev() {
-                if c.is_alphanumeric() || c == '_' {
-                    word_start = i;
-                } else {
-                    break;
-                }
-            }
-            let word = &prefix[word_start..];
-            let before_word = prefix[..word_start].trim_end();
-            if let Some(stripped) = before_word.strip_suffix('.') {
-                let before_dot = stripped.trim_end();
-                let mut start = before_dot.len();
-                for (i, c) in before_dot.char_indices().rev() {
-                    if c.is_alphanumeric() || c == '_' || c == '.' {
-                        start = i;
-                    } else {
-                        break;
-                    }
-                }
-                let expr = &before_dot[start..];
-                (true, expr, word, stripped.len())
-            } else {
-                (false, "", "", 0)
-            }
-        }
-    };
+    let (is_dot_access, expr_before_dot, member_word, dot_col) = detect_dot_access(prefix);
 
     if is_dot_access && !expr_before_dot.is_empty() {
-        log(&format!(
-            "Swizzle completion triggered for expr='{expr_before_dot}', member_filter='{member_word}' at line={line_idx}, col={col_idx}"
-        ));
+        if let Some(dim) = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot) {
+            log(&format!(
+                "Swizzle completion triggered for expr='{expr_before_dot}', member_filter='{member_word}' at line={line_idx}, col={col_idx}"
+            ));
 
-        let dim = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot);
-        let mut swizzles = generate_swizzle_completions(dim);
-        if !member_word.is_empty() {
-            swizzles.retain(|s| {
-                s["label"]
-                    .as_str()
-                    .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
-            });
-        }
-        let swizzle_range = json!({
-            "start": { "line": line_idx, "character": dot_col + 1 },
-            "end": { "line": line_idx, "character": safe_col }
-        });
-        for item in &mut swizzles {
-            if let Some(obj) = item.as_object_mut() {
-                let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
-                obj.insert("textEdit".to_string(), json!({
-                    "range": swizzle_range,
-                    "newText": label
-                }));
+            let mut swizzles = generate_swizzle_completions(dim);
+            if !member_word.is_empty() {
+                swizzles.retain(|s| {
+                    s["label"]
+                        .as_str()
+                        .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
+                });
             }
+            let swizzle_range = json!({
+                "start": { "line": line_idx, "character": dot_col + 1 },
+                "end": { "line": line_idx, "character": safe_col }
+            });
+            for item in &mut swizzles {
+                if let Some(obj) = item.as_object_mut() {
+                    let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+                    obj.insert("textEdit".to_string(), json!({
+                        "range": swizzle_range,
+                        "newText": label
+                    }));
+                }
+            }
+            return json!(swizzles);
+        } else {
+            let members = extract_struct_members(&user_vars, doc, doc_cache, expr_before_dot);
+            let mut items = Vec::new();
+            let member_range = json!({
+                "start": { "line": line_idx, "character": dot_col + 1 },
+                "end": { "line": line_idx, "character": safe_col }
+            });
+            for (field_name, field_type) in members {
+                if member_word.is_empty() || starts_with_ignore_ascii_case(&field_name, member_word) {
+                    items.push(json!({
+                        "label": field_name,
+                        "kind": 5, // Field
+                        "detail": field_type,
+                        "insertText": field_name,
+                        "insertTextFormat": 1,
+                        "textEdit": {
+                            "range": member_range,
+                            "newText": field_name
+                        },
+                        "sortText": format!("00_{}", field_name)
+                    }));
+                }
+            }
+            return json!(items);
         }
-        return json!(swizzles);
     }
 
     // Extract word under/before cursor
-    let mut word_start = prefix.len();
-    for (i, c) in prefix.char_indices().rev() {
-        if c.is_alphanumeric() || c == '_' {
-            word_start = i;
-        } else {
-            break;
-        }
-    }
-    let word = &prefix[word_start..];
-
-    let mut word_end = safe_col;
-    for (i, c) in line[safe_col..].char_indices() {
-        if c.is_alphanumeric() || c == '_' {
-            word_end = safe_col + i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-
-    let following_has_paren = line[word_end..].trim_start().starts_with('(');
+    let (word_start, word) = extract_word_prefix(prefix);
+    let (word_end, following_has_paren) = check_following_paren(line, safe_col);
 
     let replace_range = json!({
         "start": { "line": line_idx, "character": word_start },
@@ -1822,100 +2038,159 @@ pub fn enhance_analyzer_completions(
     let prefix = &line[..safe_col];
 
     // Check if following character is '('
-    let mut word_end = safe_col;
-    for (i, c) in line[safe_col..].char_indices() {
-        if c.is_alphanumeric() || c == '_' {
-            word_end = safe_col + i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    let following_has_paren = line[word_end..].trim_start().starts_with('(');
+    let (word_end, following_has_paren) = check_following_paren(line, safe_col);
 
     // Extract word
-    let mut word_start = prefix.len();
-    for (i, c) in prefix.char_indices().rev() {
-        if c.is_alphanumeric() || c == '_' {
-            word_start = i;
-        } else {
-            break;
-        }
-    }
-    let word = &prefix[word_start..];
+    let (word_start, word) = extract_word_prefix(prefix);
 
     // Swizzle detection
-    let (is_dot_access, expr_before_dot, member_word, dot_col) = {
-        let trimmed = prefix.trim_end();
-        if let Some(stripped) = trimmed.strip_suffix('.') {
-            let before_dot = stripped.trim_end();
-            let mut start = before_dot.len();
-            for (i, c) in before_dot.char_indices().rev() {
-                if c.is_alphanumeric() || c == '_' || c == '.' {
-                    start = i;
-                } else {
-                    break;
-                }
-            }
-            let expr = &before_dot[start..];
-            (true, expr, "", stripped.len())
-        } else {
-            let mut w_start = prefix.len();
-            for (i, c) in prefix.char_indices().rev() {
-                if c.is_alphanumeric() || c == '_' {
-                    w_start = i;
-                } else {
-                    break;
-                }
-            }
-            let w = &prefix[w_start..];
-            let before_word = prefix[..w_start].trim_end();
-            if let Some(stripped) = before_word.strip_suffix('.') {
-                let before_dot = stripped.trim_end();
-                let mut start = before_dot.len();
-                for (i, c) in before_dot.char_indices().rev() {
-                    if c.is_alphanumeric() || c == '_' || c == '.' {
-                        start = i;
-                    } else {
-                        break;
-                    }
-                }
-                let expr = &before_dot[start..];
-                (true, expr, w, stripped.len())
-            } else {
-                (false, "", "", 0)
-            }
-        }
-    };
+    let (is_dot_access, expr_before_dot, member_word, dot_col) = detect_dot_access(prefix);
 
     let mut out_items = Vec::new();
     let mut seen_labels = HashSet::new();
 
-    // 1. If swizzle triggered, prepend swizzles!
+    // 1. If dot access, prepend swizzles (for vectors) or struct members (for structs)
     if is_dot_access && !expr_before_dot.is_empty() {
-        let user_vars = signature::scan_user_variables(doc, None, Some(uri));
-        let dim = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot);
-        let mut swizzles = generate_swizzle_completions(dim);
-        if !member_word.is_empty() {
-            swizzles.retain(|s| {
-                s["label"]
-                    .as_str()
-                    .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
+        let user_vars = if doc.contains("#include") {
+            signature::resolve_includes_and_scan_variables(uri, doc, doc_cache)
+        } else {
+            signature::scan_user_variables(doc, None, Some(uri))
+        };
+        if let Some(dim) = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot) {
+            let mut swizzles = generate_swizzle_completions(dim);
+            if !member_word.is_empty() {
+                swizzles.retain(|s| {
+                    s["label"]
+                        .as_str()
+                        .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
+                });
+            }
+            let swizzle_range = json!({
+                "start": { "line": line_idx, "character": dot_col + 1 },
+                "end": { "line": line_idx, "character": safe_col }
             });
-        }
-        let swizzle_range = json!({
-            "start": { "line": line_idx, "character": dot_col + 1 },
-            "end": { "line": line_idx, "character": safe_col }
-        });
-        for item in &mut swizzles {
-            if let Some(obj) = item.as_object_mut() {
-                let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
-                if seen_labels.insert(label.clone()) {
-                    obj.insert("textEdit".to_string(), json!({
-                        "range": swizzle_range,
-                        "newText": label
-                    }));
-                    out_items.push(Value::Object(obj.clone()));
+            for item in &mut swizzles {
+                if let Some(obj) = item.as_object_mut() {
+                    let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+                    if seen_labels.insert(label.clone()) {
+                        obj.insert("textEdit".to_string(), json!({
+                            "range": swizzle_range,
+                            "newText": label
+                        }));
+                        out_items.push(Value::Object(obj.clone()));
+                    }
                 }
+            }
+        } else {
+            // Struct members (from user code or #includes)
+            let members = extract_struct_members(&user_vars, doc, doc_cache, expr_before_dot);
+            let member_range = json!({
+                "start": { "line": line_idx, "character": dot_col + 1 },
+                "end": { "line": line_idx, "character": safe_col }
+            });
+            for (field_name, field_type) in members {
+                if (member_word.is_empty() || starts_with_ignore_ascii_case(&field_name, member_word))
+                    && seen_labels.insert(field_name.clone())
+                {
+                    out_items.push(json!({
+                        "label": field_name,
+                        "kind": 5, // Field
+                        "detail": field_type,
+                        "insertText": field_name,
+                        "insertTextFormat": 1,
+                        "textEdit": {
+                            "range": member_range,
+                            "newText": field_name
+                        },
+                        "sortText": format!("00_{}", field_name)
+                    }));
+                }
+            }
+        }
+    } else if !is_dot_access {
+        // Normal identifier completion: Inject user variables and functions (from current doc and recursively included #include files)
+        let replace_range = json!({
+            "start": { "line": line_idx, "character": word_start },
+            "end": { "line": line_idx, "character": word_end }
+        });
+
+        let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+
+        // 1. User variables & symbols (constants, structs, uniforms, etc.)
+        for var in user_vars {
+            if (word.is_empty() || starts_with_ignore_ascii_case(&var.name, word))
+                && seen_labels.insert(var.name.clone())
+            {
+                let kind = match var.qualifier.as_str() {
+                    "struct" => 22,            // Struct
+                    "const" | "#define" => 21, // Constant
+                    _ => 6,                    // Variable
+                };
+
+                let detail = format!("{} {}", var.qualifier, var.var_type);
+                let doc_text = match (&var.source, &var.doc) {
+                    (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
+                    (Some(src), None) => format!("*Defined in `{src}`*"),
+                    (None, Some(d)) => d.clone(),
+                    (None, None) => String::new(),
+                };
+
+                out_items.push(json!({
+                    "label": var.name,
+                    "kind": kind,
+                    "detail": detail,
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": doc_text,
+                    },
+                    "insertText": var.name,
+                    "insertTextFormat": 1,
+                    "textEdit": {
+                        "range": replace_range,
+                        "newText": var.name
+                    },
+                    "sortText": format!("00_{}", var.name),
+                }));
+            }
+        }
+
+        // 2. User functions (from current doc & #includes)
+        for func in user_funcs {
+            if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
+                && seen_labels.insert(func.name.clone())
+            {
+                let detail = func.label.clone();
+                let doc_text = match (&func.source, &func.doc) {
+                    (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
+                    (Some(src), None) => format!("*Defined in `{src}`*"),
+                    (None, Some(d)) => d.clone(),
+                    (None, None) => String::new(),
+                };
+
+                let (insert_text, insert_format) = if following_has_paren {
+                    (func.name.clone(), 1)
+                } else if func.parameters.is_empty() {
+                    (format!("{}()$0", func.name), 2)
+                } else {
+                    (format!("{}($1)$0", func.name), 2)
+                };
+
+                out_items.push(json!({
+                    "label": func.name,
+                    "kind": 3, // Function
+                    "detail": detail,
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": doc_text,
+                    },
+                    "insertText": insert_text,
+                    "insertTextFormat": insert_format,
+                    "textEdit": {
+                        "range": replace_range,
+                        "newText": insert_text
+                    },
+                    "sortText": format!("01_{}", func.name),
+                }));
             }
         }
     }
@@ -2322,16 +2597,6 @@ pub fn format_document(
     ]))
 }
 
-pub fn format_range(
-    uri: &str,
-    text: &str,
-    _range: Option<&Value>,
-    options: Option<&Value>,
-    default_engine: FormatterEngine,
-    custom_clang: Option<&str>,
-) -> Option<Value> {
-    format_document(uri, text, options, default_engine, custom_clang)
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorItem {
@@ -2538,6 +2803,22 @@ struct ValidationRequest {
     configured_version: Option<String>,
 }
 
+fn get_setting_str<'a>(settings: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    let scopes = [
+        Some(settings),
+        settings.get("glsl_validator"),
+        settings.get("initialization_options"),
+    ];
+    for scope in scopes.into_iter().flatten() {
+        for &k in keys {
+            if let Some(s) = scope.get(k).and_then(|v| v.as_str()) {
+                return Some(s.trim());
+            }
+        }
+    }
+    None
+}
+
 fn main() -> io::Result<()> {
     log("=== glsl_validator started ===");
     let stdin = io::stdin();
@@ -2550,39 +2831,42 @@ fn main() -> io::Result<()> {
     let out_for_worker = Arc::clone(&stdout_shared);
     let doc_cache_worker = Arc::clone(&doc_cache);
     thread::spawn(move || {
-        while let Ok(mut req) = rx_val.recv() {
+        while let Ok(req) = rx_val.recv() {
             // Debounce delay: coalesce rapid keystrokes so glslang is NOT spawned on every letter!
             thread::sleep(std::time::Duration::from_millis(120));
+            let mut pending: HashMap<String, ValidationRequest> = HashMap::new();
+            pending.insert(req.uri.clone(), req);
             while let Ok(newer) = rx_val.try_recv() {
-                if newer.uri == req.uri {
-                    req = newer;
-                }
+                pending.insert(newer.uri.clone(), newer);
             }
 
-            let diagnostics = {
-                let cache = doc_cache_worker.lock().unwrap_or_else(|e| e.into_inner());
-                validate_shader(
-                    &req.uri,
-                    &req.text,
-                    req.target,
-                    req.glslang_path.as_deref(),
-                    &cache,
-                    req.configured_version.as_deref(),
-                )
-            };
-            let notif = json!({
-                "jsonrpc": "2.0",
-                "method": "textDocument/publishDiagnostics",
-                "params": {
-                    "uri": req.uri,
-                    "diagnostics": diagnostics
+            for (_, req) in pending.drain() {
+                let diagnostics = {
+                    let cache = doc_cache_worker.lock().unwrap_or_else(|e| e.into_inner());
+                    validate_shader(
+                        &req.uri,
+                        &req.text,
+                        req.target,
+                        req.glslang_path.as_deref(),
+                        &cache,
+                        req.configured_version.as_deref(),
+                    )
+                };
+                let notif = json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": req.uri,
+                        "diagnostics": diagnostics
+                    }
+                });
+                if let Ok(mut lock) = out_for_worker.lock() {
+                    let _ = send_lsp_message(&mut *lock, &notif);
                 }
-            });
-            if let Ok(mut lock) = out_for_worker.lock() {
-                let _ = send_lsp_message(&mut *lock, &notif);
             }
         }
     });
+
 
     let send_resp = |msg: &Value| -> io::Result<()> {
         let mut lock = stdout_shared
@@ -2650,49 +2934,37 @@ fn main() -> io::Result<()> {
             match method {
                 "initialize" => {
                     if let Some(opts) = msg["params"].get("initializationOptions") {
-                        if let Some(t) = opts.get("target_api").and_then(|v| v.as_str()) {
+                        if let Some(t) = get_setting_str(opts, &["target_api"]) {
                             default_target = TargetApi::parse_target(t);
                             log(&format!("Initialized with target_api={:?}", default_target));
                         }
-                        if let Some(f) = opts.get("formatter").and_then(|v| v.as_str()) {
+                        if let Some(f) = get_setting_str(opts, &["formatter"]) {
                             default_engine = FormatterEngine::parse_engine(f);
                             log(&format!(
                                 "Initialized with formatter engine={:?}",
                                 default_engine
                             ));
                         }
-                        if let Some(p) = opts
-                            .get("glslang_validator_path")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| opts.get("glslang_path").and_then(|v| v.as_str()))
-                        {
-                            let p = p.trim();
+                        if let Some(p) = get_setting_str(opts, &["glslang_validator_path", "glslang_path"]) {
                             if !p.is_empty() {
                                 custom_glslang_path = Some(p.to_string());
                                 cached_glslang_path = find_glslang_validator(Some(p));
                                 log(&format!("Initialized with custom glslang_path={p}"));
                             }
                         }
-                        if let Some(p) = opts
-                            .get("glsl_analyzer_path")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| opts.get("analyzer_path").and_then(|v| v.as_str()))
-                        {
-                            let p = p.trim();
+                        if let Some(p) = get_setting_str(opts, &["glsl_analyzer_path", "analyzer_path"]) {
                             if !p.is_empty() {
                                 custom_analyzer_path = Some(p.to_string());
                                 log(&format!("Initialized with custom glsl_analyzer_path={p}"));
                             }
                         }
-                        if let Some(p) = opts.get("clang_format_path").and_then(|v| v.as_str()) {
-                            let p = p.trim();
+                        if let Some(p) = get_setting_str(opts, &["clang_format_path"]) {
                             if !p.is_empty() {
                                 custom_clang_path = Some(p.to_string());
                                 log(&format!("Initialized with custom clang_format_path={p}"));
                             }
                         }
-                        if let Some(v) = opts.get("default_version").and_then(|v| v.as_str()) {
-                            let v = v.trim();
+                        if let Some(v) = get_setting_str(opts, &["default_version"]) {
                             if !v.is_empty() {
                                 custom_default_version = Some(v.to_string());
                                 log(&format!("Initialized with custom default_version={v}"));
@@ -2729,7 +3001,6 @@ fn main() -> io::Result<()> {
                                 "hoverProvider": true,
                                 "definitionProvider": true,
                                 "documentFormattingProvider": true,
-                                "documentRangeFormattingProvider": true,
                                 "colorProvider": true
                             }
                         }
@@ -2740,7 +3011,7 @@ fn main() -> io::Result<()> {
                     let sig_help = {
                         let mut bridge_sig = None;
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(res) = bridge.send_request("textDocument/signatureHelp", msg["params"].clone(), std::time::Duration::from_millis(80)) {
+                            if let Some(res) = bridge.send_request("textDocument/signatureHelp", msg["params"].clone(), std::time::Duration::from_millis(120)) {
                                 if !res.is_null() && res.get("signatures").and_then(|s| s.as_array()).is_some_and(|a| !a.is_empty()) {
                                     bridge_sig = Some(res);
                                 }
@@ -2764,7 +3035,7 @@ fn main() -> io::Result<()> {
                     let hover_info = {
                         let mut bridge_hover = None;
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(res) = bridge.send_request("textDocument/hover", msg["params"].clone(), std::time::Duration::from_millis(100)) {
+                            if let Some(res) = bridge.send_request("textDocument/hover", msg["params"].clone(), std::time::Duration::from_millis(120)) {
                                 if !res.is_null() && res.get("contents").is_some() {
                                     bridge_hover = Some(res);
                                 }
@@ -2788,7 +3059,7 @@ fn main() -> io::Result<()> {
                     let def_info = {
                         let mut bridge_def = None;
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(res) = bridge.send_request("textDocument/definition", msg["params"].clone(), std::time::Duration::from_millis(100)) {
+                            if let Some(res) = bridge.send_request("textDocument/definition", msg["params"].clone(), std::time::Duration::from_millis(120)) {
                                 if !res.is_null() && (res.as_array().is_some_and(|a| !a.is_empty()) || res.is_object()) {
                                     bridge_def = Some(res);
                                 }
@@ -2853,14 +3124,12 @@ fn main() -> io::Result<()> {
                 "textDocument/rangeFormatting" => {
                     let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
                     let options = msg["params"].get("options");
-                    let range = msg["params"].get("range");
                     let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
                     let edits = cached_text
                         .and_then(|text| {
-                            format_range(
+                            format_document(
                                 uri,
                                 &text,
-                                range,
                                 options,
                                 default_engine,
                                 custom_clang_path.as_deref(),
@@ -2900,6 +3169,7 @@ fn main() -> io::Result<()> {
                     send_resp(&resp)?;
                 }
                 "shutdown" => {
+                    analyzer_bridge = None;
                     let resp = json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -2925,29 +3195,16 @@ fn main() -> io::Result<()> {
             }
             "exit" => {
                 log("Received exit notification.");
-                std::process::exit(0);
+                drop(analyzer_bridge);
+                break Ok(());
             }
             "workspace/didChangeConfiguration" => {
                 log("Received workspace/didChangeConfiguration notification.");
                 if let Some(settings) = msg["params"].get("settings") {
                     let mut revalidate = false;
-                    let mut new_target = None;
-                    if let Some(t) = settings.get("target_api").and_then(|v| v.as_str()) {
-                        new_target = Some(TargetApi::parse_target(t));
-                    } else if let Some(t) = settings
-                        .get("glsl_validator")
-                        .and_then(|g| g.get("target_api"))
-                        .and_then(|v| v.as_str())
-                    {
-                        new_target = Some(TargetApi::parse_target(t));
-                    } else if let Some(t) = settings
-                        .get("initialization_options")
-                        .and_then(|g| g.get("target_api"))
-                        .and_then(|v| v.as_str())
-                    {
-                        new_target = Some(TargetApi::parse_target(t));
-                    }
-                    if let Some(nt) = new_target {
+
+                    if let Some(t) = get_setting_str(settings, &["target_api"]) {
+                        let nt = TargetApi::parse_target(t);
                         if nt != default_target {
                             log(&format!(
                                 "Updated default_target from {:?} to {:?}",
@@ -2958,36 +3215,7 @@ fn main() -> io::Result<()> {
                         }
                     }
 
-                    if let Some(p) = settings
-                        .get("glslang_validator_path")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| settings.get("glslang_path").and_then(|v| v.as_str()))
-                        .or_else(|| {
-                            settings
-                                .get("glsl_validator")
-                                .and_then(|g| g.get("glslang_validator_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                        .or_else(|| {
-                            settings
-                                .get("glsl_validator")
-                                .and_then(|g| g.get("glslang_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                        .or_else(|| {
-                            settings
-                                .get("initialization_options")
-                                .and_then(|g| g.get("glslang_validator_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                        .or_else(|| {
-                            settings
-                                .get("initialization_options")
-                                .and_then(|g| g.get("glslang_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                    {
-                        let p = p.trim();
+                    if let Some(p) = get_setting_str(settings, &["glslang_validator_path", "glslang_path"]) {
                         if !p.is_empty() {
                             if custom_glslang_path.as_deref() != Some(p) {
                                 custom_glslang_path = Some(p.to_string());
@@ -3003,23 +3231,7 @@ fn main() -> io::Result<()> {
                         }
                     }
 
-                    if let Some(p) = settings
-                        .get("clang_format_path")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| {
-                            settings
-                                .get("glsl_validator")
-                                .and_then(|g| g.get("clang_format_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                        .or_else(|| {
-                            settings
-                                .get("initialization_options")
-                                .and_then(|g| g.get("clang_format_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                    {
-                        let p = p.trim();
+                    if let Some(p) = get_setting_str(settings, &["clang_format_path"]) {
                         if !p.is_empty() {
                             if custom_clang_path.as_deref() != Some(p) {
                                 custom_clang_path = Some(p.to_string());
@@ -3031,66 +3243,29 @@ fn main() -> io::Result<()> {
                         }
                     }
 
-                    if let Some(v) = settings
-                        .get("default_version")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| {
-                            settings
-                                .get("glsl_validator")
-                                .and_then(|g| g.get("default_version"))
-                                .and_then(|v| v.as_str())
-                        })
-                        .or_else(|| {
-                            settings
-                                .get("initialization_options")
-                                .and_then(|g| g.get("default_version"))
-                                .and_then(|v| v.as_str())
-                        })
-                    {
-                        if custom_default_version.as_deref() != Some(v) {
-                            custom_default_version = Some(v.to_string());
-                            log(&format!("Updated default_version={v}"));
+                    if let Some(v) = get_setting_str(settings, &["default_version"]) {
+                        if !v.is_empty() {
+                            if custom_default_version.as_deref() != Some(v) {
+                                custom_default_version = Some(v.to_string());
+                                log(&format!("Updated default_version={v}"));
+                                revalidate = true;
+                            }
+                        } else if custom_default_version.is_some() {
+                            custom_default_version = None;
+                            log("Reset default_version to default");
                             revalidate = true;
                         }
                     }
 
-                    if let Some(f) = settings.get("formatter").and_then(|v| v.as_str()) {
-                        default_engine = FormatterEngine::parse_engine(f);
-                        log(&format!("Updated default_engine to {:?}", default_engine));
-                    } else if let Some(f) = settings
-                        .get("glsl_validator")
-                        .and_then(|g| g.get("formatter"))
-                        .and_then(|v| v.as_str())
-                    {
-                        default_engine = FormatterEngine::parse_engine(f);
-                        log(&format!("Updated default_engine to {:?}", default_engine));
-                    } else if let Some(f) = settings
-                        .get("initialization_options")
-                        .and_then(|g| g.get("formatter"))
-                        .and_then(|v| v.as_str())
-                    {
-                        default_engine = FormatterEngine::parse_engine(f);
-                        log(&format!("Updated default_engine to {:?}", default_engine));
+                    if let Some(f) = get_setting_str(settings, &["formatter"]) {
+                        let engine = FormatterEngine::parse_engine(f);
+                        if engine != default_engine {
+                            default_engine = engine;
+                            log(&format!("Updated default_engine to {:?}", default_engine));
+                        }
                     }
 
-                    if let Some(p) = settings
-                        .get("glsl_analyzer_path")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| settings.get("analyzer_path").and_then(|v| v.as_str()))
-                        .or_else(|| {
-                            settings
-                                .get("glsl_validator")
-                                .and_then(|g| g.get("glsl_analyzer_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                        .or_else(|| {
-                            settings
-                                .get("initialization_options")
-                                .and_then(|g| g.get("glsl_analyzer_path"))
-                                .and_then(|v| v.as_str())
-                        })
-                    {
-                        let p = p.trim();
+                    if let Some(p) = get_setting_str(settings, &["glsl_analyzer_path", "analyzer_path"]) {
                         if !p.is_empty() && custom_analyzer_path.as_deref() != Some(p) {
                             custom_analyzer_path = Some(p.to_string());
                             log(&format!("Updated custom_analyzer_path={p}"));
@@ -3298,11 +3473,12 @@ mod tests {
     #[test]
     fn test_infer_vector_dimension() {
         let doc = "struct Test {\n    vec4 a;\n    vec2 b;\n};\nvec3 normal;\nTest t;\n";
-        assert_eq!(infer_vector_dimension(doc, "t.a"), 4);
-        assert_eq!(infer_vector_dimension(doc, "t.b"), 2);
-        assert_eq!(infer_vector_dimension(doc, "normal"), 3);
-        assert_eq!(infer_vector_dimension(doc, "t.a.xyz"), 3);
-        assert_eq!(infer_vector_dimension(doc, "gl_Position"), 4);
+        assert_eq!(infer_vector_dimension(doc, "t.a"), Some(4));
+        assert_eq!(infer_vector_dimension(doc, "t.b"), Some(2));
+        assert_eq!(infer_vector_dimension(doc, "normal"), Some(3));
+        assert_eq!(infer_vector_dimension(doc, "t.a.xyz"), Some(3));
+        assert_eq!(infer_vector_dimension(doc, "gl_Position"), Some(4));
+        assert_eq!(infer_vector_dimension(doc, "t"), None);
 
         let test_vars = vec![signature::VariableSymbol {
             name: "testColor".to_string(),
@@ -3314,7 +3490,7 @@ mod tests {
             col: 0,
             file_uri: None,
         }];
-        assert_eq!(infer_vector_dimension_from_vars(&test_vars, doc, "testColor"), 4);
+        assert_eq!(infer_vector_dimension_from_vars(&test_vars, doc, "testColor"), Some(4));
     }
 
     #[test]
@@ -3484,16 +3660,17 @@ mod tests {
 
     #[test]
     fn test_find_glsl_analyzer_and_glslang_zed_discovery() {
+        let dirs = get_zed_extension_dirs();
+        assert!(!dirs.is_empty(), "Should compute candidate Zed extension directories");
         let analyzer = find_glsl_analyzer(None);
         println!("find_glsl_analyzer: {:?}", analyzer);
         let glslang = find_glslang_validator(None);
         println!("find_glslang_validator: {:?}", glslang);
-        #[cfg(windows)]
-        {
-            if std::env::var("LOCALAPPDATA").is_ok() {
-                assert!(analyzer.is_some(), "glsl_analyzer should be discovered in Zed extensions directory");
-                assert!(glslang.is_some(), "glslang should be discovered in Zed extensions directory");
-            }
+        if let Some(ref path) = analyzer {
+            assert!(Path::new(path).is_file());
+        }
+        if let Some(ref path) = glslang {
+            assert!(Path::new(path).is_file());
         }
     }
 
@@ -3936,6 +4113,151 @@ void main() {
             let lbl = item["label"].as_str().unwrap();
             assert!(seen.insert(lbl), "Duplicate label in enhanced completions: '{lbl}'");
         }
+
+        // 4. Test #include symbol enhancement across files
+        let common_uri = "file:///project/common.glsl";
+        let common_code = "void test() {}\nvec4 testColor = vec4(1.0);";
+        doc_cache.insert(common_uri.to_string(), common_code.to_string());
+
+        let shader_uri = "file:///project/main.frag";
+        let shader_code = "#include \"common.glsl\"\nvoid main() {\n    te\n}";
+        doc_cache.insert(shader_uri.to_string(), shader_code.to_string());
+
+        let req_inc = json!({
+            "params": {
+                "textDocument": { "uri": shader_uri },
+                "position": { "line": 2, "character": 6 }
+            }
+        });
+        let raw_analyzer_items = json!([
+            {
+                "label": "texture",
+                "kind": 3
+            },
+            {
+                "label": "testColor", // simulate analyzer also returning testColor to test dedup
+                "kind": 6
+            }
+        ]);
+        let inc_enhanced = enhance_analyzer_completions(&req_inc, raw_analyzer_items, &doc_cache);
+        let inc_items = inc_enhanced.as_array().expect("inc items array");
+
+        let test_func = inc_items.iter().find(|i| i["label"] == "test").expect("test() function from include");
+        assert_eq!(test_func["insertText"].as_str().unwrap(), "test()$0");
+        assert_eq!(test_func["insertTextFormat"].as_u64().unwrap(), 2);
+        assert!(test_func["documentation"]["value"].as_str().unwrap().contains("common.glsl"));
+
+        let test_var = inc_items.iter().find(|i| i["label"] == "testColor").expect("testColor variable from include");
+        assert_eq!(test_var["insertText"].as_str().unwrap(), "testColor");
+        assert!(test_var["documentation"]["value"].as_str().unwrap().contains("common.glsl"));
+
+        // Deduplication check: testColor must appear exactly once despite being in raw_analyzer_items
+        let test_color_count = inc_items.iter().filter(|i| i["label"] == "testColor").count();
+        assert_eq!(test_color_count, 1, "testColor must be deduplicated");
+
+        // 5. Test struct dot access NEVER injects swizzles! (User screenshot issue)
+        let struct_code = r#"struct Material {
+    vec4 test;
+    float a;
+};
+void main() {
+    Material mat;
+    mat.
+}
+"#;
+        doc_cache.insert("file:///struct_test.frag".to_string(), struct_code.to_string());
+        let req_struct = json!({
+            "params": {
+                "textDocument": { "uri": "file:///struct_test.frag" },
+                "position": { "line": 6, "character": 8 } // right after "mat."
+            }
+        });
+        let analyzer_struct_items = json!([
+            { "label": "test", "kind": 5, "detail": "vec4" },
+            { "label": "a", "kind": 5, "detail": "float" }
+        ]);
+        let struct_enhanced = enhance_analyzer_completions(&req_struct, analyzer_struct_items, &doc_cache);
+        let struct_items = struct_enhanced.as_array().expect("struct items array");
+
+        // Must contain "test" and "a"
+        assert!(struct_items.iter().any(|i| i["label"] == "test"));
+        assert!(struct_items.iter().any(|i| i["label"] == "a"));
+
+        // Must NOT contain ANY vector swizzles or length()!
+        for swizzle in &["x", "y", "z", "w", "r", "g", "b", "s", "t", "p", "q", "xy", "rgba", "stpq", "length()"] {
+            // Note: 'a' in struct is the float member 'a', NOT the swizzle "Alpha color component"
+            if *swizzle == "a" {
+                let a_item = struct_items.iter().find(|i| i["label"] == "a").unwrap();
+                let detail = a_item["detail"].as_str().unwrap_or("");
+                assert_eq!(detail, "float", "Member 'a' must be the struct float field, not alpha swizzle");
+                continue;
+            }
+            assert!(
+                !struct_items.iter().any(|i| i["label"] == *swizzle),
+                "Struct completion must NOT contain swizzle '{swizzle}'"
+            );
+        }
+
+        // Test fallback struct completion without analyzer
+        let fallback_struct_res = handle_completion(&req_struct, &doc_cache);
+        let fallback_struct_items = fallback_struct_res.as_array().expect("fallback struct items");
+        assert!(fallback_struct_items.iter().any(|i| i["label"] == "test"));
+        assert!(fallback_struct_items.iter().any(|i| i["label"] == "a"));
+        assert!(!fallback_struct_items.iter().any(|i| i["label"] == "x"));
+        assert!(!fallback_struct_items.iter().any(|i| i["label"] == "xyzw"));
+    }
+
+    #[test]
+    fn test_benchmarks_ram_and_cpu() {
+        let doc = r#"struct Material {
+    vec4 test;
+    float a;
+};
+void main() {
+    Material mat;
+    vec4 color = vec4(1.0);
+    mat.
+}
+"#;
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("file:///bench.frag".to_string(), doc.to_string());
+        let user_vars = signature::scan_user_variables(doc, None, Some("file:///bench.frag"));
+
+        let iters = 10_000;
+
+        // 1. Benchmark vector dimension inference (positive vec4 case)
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let dim = infer_vector_dimension_from_vars(&user_vars, doc, "color");
+            assert_eq!(dim, Some(4));
+        }
+        let elapsed_vec = start.elapsed();
+        let per_op_vec_ns = elapsed_vec.as_nanos() / iters as u128;
+
+        // 2. Benchmark struct swizzle elimination (rejection of struct type to None)
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let dim = infer_vector_dimension_from_vars(&user_vars, doc, "mat");
+            assert_eq!(dim, None);
+        }
+        let elapsed_struct = start.elapsed();
+        let per_op_struct_ns = elapsed_struct.as_nanos() / iters as u128;
+
+        // 3. Benchmark struct member extraction (mat -> [test, a])
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let members = extract_struct_members(&user_vars, doc, &doc_cache, "mat");
+            assert_eq!(members.len(), 2);
+        }
+        let elapsed_members = start.elapsed();
+        let per_op_members_ns = elapsed_members.as_nanos() / iters as u128;
+
+        println!("\n=================== BENCHMARK REPORT ===================");
+        println!("Iterations per test: {}", iters);
+        println!("Vector Dim Inference ('color' -> vec4)     : {} ns/op (Total: {:?})", per_op_vec_ns, elapsed_vec);
+        println!("Struct Rejection ('mat' -> None)           : {} ns/op (Total: {:?})", per_op_struct_ns, elapsed_struct);
+        println!("Struct Member Extraction ('mat' -> fields) : {} ns/op (Total: {:?})", per_op_members_ns, elapsed_members);
+        println!("========================================================\n");
     }
 }
 

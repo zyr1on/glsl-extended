@@ -2,6 +2,20 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.20] - 2026-09-15
+
+### Fixed & Optimized
+- **Dual-LSP Elimination:** Completely removed standalone `glsl_analyzer` registration from Zed's `extension.toml` and WASM extension layer. All features (AST completions, `#include` resolution, hover, goto-definition) are exclusively orchestrated via `glsl_validator`'s internal bridge, permanently fixing duplicate completion items (e.g., `testColor` appearing twice).
+- **Critical Multi-File Debounce Fix:** Fixed a bug in the diagnostic debounce worker where requests for different URIs were silently dropped when switching rapidly between files. Replaced with a per-URI pending request map ensuring all open documents are guaranteed to be validated.
+- **Process Lifecycle Management (`Drop`):** Added complete `Drop` trait implementation to `AnalyzerBridge`. Automatically sends LSP `shutdown` and `exit` notifications followed by process cleanup when the language server terminates, eliminating orphaned/zombie `glsl_analyzer` processes.
+- **Codebase Simplification & Optimization:**
+  - Extracted shared `detect_dot_access`, `extract_word_prefix`, and `check_following_paren` utilities, removing ~80 lines of duplicate parsing code between completion handlers.
+  - Refactored `didChangeConfiguration` and `initialize` option parsers with unified `get_setting_str`, slashing over 130 lines of repetitive configuration lookup boilerplate.
+  - Removed dead `format_range` wrapper and disabled misleading `documentRangeFormattingProvider` capability to align with single-engine document formatting.
+- **Enhanced Swizzle & Snippet Augmentation:** Swizzle detection and `($1)$0` Tab-to-parentheses injection remain lightning fast with deduplicated merge logic.
+
+---
+
 ## [0.1.19] - 2026-09-14
 
 ### Added
