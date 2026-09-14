@@ -18,6 +18,7 @@ grammars/
 # Temporary files and logs
 *.tmp
 *.log
+*.pdf
 *.spv
 .DS_Store
 Thumbs.db
