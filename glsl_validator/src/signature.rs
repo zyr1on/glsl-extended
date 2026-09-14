@@ -372,6 +372,28 @@ pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Optio
         return None;
     }
 
+    // If the token immediately preceding fn_name is an alphanumeric identifier (e.g. "vec3 calculateNormal(",
+    // "void myFunc(", "float doMath("), then this is a FUNCTION DECLARATION / DEFINITION, NOT a function call!
+    // Signature help must NOT trigger while the user is writing a function header.
+    let before_fn = trimmed[..ident_start].trim_end();
+    if !before_fn.is_empty() {
+        let mut prev_token_start = before_fn.len();
+        for (i, c) in before_fn.char_indices().rev() {
+            if c.is_alphanumeric() || c == '_' {
+                prev_token_start = i;
+            } else {
+                break;
+            }
+        }
+        let prev_token = &before_fn[prev_token_start..];
+        if !prev_token.is_empty() && !["return", "else", "do"].contains(&prev_token) {
+            let between_tokens = &before_fn[prev_token_start + prev_token.len()..];
+            if between_tokens.trim().is_empty() {
+                return None;
+            }
+        }
+    }
+
     // Now count commas between open_paren and cursor_offset at top level
     let mut active_param = 0;
     let mut inner_paren = 0;
@@ -1147,6 +1169,7 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
     if !matched_funcs.is_empty() {
         let mut signatures = Vec::with_capacity(matched_funcs.len());
         let mut active_sig = 0;
+        let mut best_diff = usize::MAX;
 
         for (idx, func) in matched_funcs.iter().enumerate() {
             let params_json: Vec<Value> = func
@@ -1172,7 +1195,11 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
             }));
 
             if active_param < func.parameters.len() {
-                active_sig = idx;
+                let diff = func.parameters.len() - active_param;
+                if diff < best_diff {
+                    best_diff = diff;
+                    active_sig = idx;
+                }
             }
         }
 
@@ -1420,6 +1447,33 @@ mod tests {
         // Cursor inside getFragPos(model, |)
         let call = find_enclosing_call(code, 0, 39);
         assert_eq!(call, Some(("getFragPos".to_string(), 1)));
+    }
+
+    #[test]
+    fn test_find_enclosing_call_suppressed_on_declaration() {
+        // When typing a function declaration/header, signature help must NOT trigger!
+        let code = "vec3 calculateNormal(mat4 normal, )";
+        let call = find_enclosing_call(code, 0, 34);
+        assert_eq!(
+            call, None,
+            "Must not trigger signature help on function declaration"
+        );
+
+        let code_void = "void myFunc(int a, float b, )";
+        let call_void = find_enclosing_call(code_void, 0, 28);
+        assert_eq!(
+            call_void, None,
+            "Must not trigger on void function declaration"
+        );
+
+        // But calls with assignments or returns MUST trigger!
+        let code_call = "vec3 n = calculateNormal(mat4(1.0), );";
+        let call_res = find_enclosing_call(code_call, 0, 36);
+        assert_eq!(call_res, Some(("calculateNormal".to_string(), 1)));
+
+        let code_ret = "return calculateNormal(mat4(1.0), );";
+        let call_ret = find_enclosing_call(code_ret, 0, 34);
+        assert_eq!(call_ret, Some(("calculateNormal".to_string(), 1)));
     }
 
     #[test]
