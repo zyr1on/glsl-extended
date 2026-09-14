@@ -564,3 +564,8 @@ static BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
 pub fn lookup_builtin_function(name: &str) -> Option<&'static BuiltinFunction> {
     BUILTIN_FUNCTIONS.iter().find(|f| f.name == name)
 }
+
+pub fn get_all_builtins() -> &'static [BuiltinFunction] {
+    BUILTIN_FUNCTIONS
+}
+

@@ -2,7 +2,9 @@
 // Signature Help and Hover provider for GLSL 4.6 (built-ins from docs.gl & user functions across #include)
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 use serde_json::{json, Value};
 use crate::docs;
 use crate::uri_to_path;
@@ -307,17 +309,100 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
     results
 }
 
-/// Resolves #include directives and aggregates function signatures.
-pub fn resolve_includes_and_scan(
-    uri: &str,
-    text: &str,
+struct CacheEntry {
+    mtime: SystemTime,
+    functions: Vec<FunctionSignature>,
+}
+
+static INCLUDE_CACHE: OnceLock<Mutex<HashMap<PathBuf, CacheEntry>>> = OnceLock::new();
+
+fn get_include_cache() -> &'static Mutex<HashMap<PathBuf, CacheEntry>> {
+    INCLUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn scan_included_file(
+    candidate: &Path,
+    source_label: &str,
     doc_cache: &HashMap<String, String>,
-) -> Vec<FunctionSignature> {
-    let mut all_functions = scan_user_functions(text, None);
-    let mut visited: HashSet<PathBuf> = HashSet::new();
+    all_functions: &mut Vec<FunctionSignature>,
+    visited: &mut HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth > 8 {
+        return;
+    }
 
-    let base_dir = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf()));
+    // 1. If currently open in Zed editor buffer: parse live content (0 disk I/O)
+    let clean_path = candidate.to_string_lossy().replace('\\', "/");
+    let candidate_uri = format!("file:///{}", clean_path.trim_start_matches('/'));
+    if let Some(live_text) = doc_cache.get(&candidate_uri) {
+        let funcs = scan_user_functions(live_text, Some(source_label));
+        all_functions.extend(funcs);
 
+        if let Some(parent_dir) = candidate.parent() {
+            scan_includes_in_text(live_text, parent_dir, doc_cache, all_functions, visited, depth + 1);
+        }
+        return;
+    }
+
+    // 2. If on disk: check mtime cache for instant sub-microsecond response
+    if !candidate.is_file() {
+        return;
+    }
+
+    let mtime = std::fs::metadata(candidate)
+        .and_then(|m| m.modified())
+        .ok();
+
+    if let Some(mt) = mtime {
+        let cached = {
+            if let Ok(cache) = get_include_cache().lock() {
+                cache.get(candidate).and_then(|entry| {
+                    if entry.mtime == mt {
+                        Some(entry.functions.clone())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        };
+
+        if let Some(funcs) = cached {
+            all_functions.extend(funcs);
+            return;
+        }
+
+        // Cache miss: read from disk and cache
+        if let Ok(disk_text) = std::fs::read_to_string(candidate) {
+            let funcs = scan_user_functions(&disk_text, Some(source_label));
+            if let Ok(mut cache) = get_include_cache().lock() {
+                if cache.len() > 64 {
+                    cache.clear();
+                }
+                cache.insert(candidate.to_path_buf(), CacheEntry {
+                    mtime: mt,
+                    functions: funcs.clone(),
+                });
+            }
+            all_functions.extend(funcs);
+
+            if let Some(parent_dir) = candidate.parent() {
+                scan_includes_in_text(&disk_text, parent_dir, doc_cache, all_functions, visited, depth + 1);
+            }
+        }
+    }
+}
+
+fn scan_includes_in_text(
+    text: &str,
+    base_dir: &Path,
+    doc_cache: &HashMap<String, String>,
+    all_functions: &mut Vec<FunctionSignature>,
+    visited: &mut HashSet<PathBuf>,
+    depth: usize,
+) {
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("#include") {
@@ -326,39 +411,39 @@ pub fn resolve_includes_and_scan(
                 continue;
             }
 
-            if let Some(ref dir) = base_dir {
-                let candidate = dir.join(include_target);
-                if !visited.insert(candidate.clone()) {
-                    continue;
-                }
-
-                // Check doc_cache by file:/// URI first (0 disk I/O, live unsaved buffer)
-                let candidate_uri = format!("file:///{}", candidate.to_string_lossy().replace('\\', "/"));
-                let content = doc_cache.get(&candidate_uri).map(|cached| cached.as_str());
-
-                let disk_content;
-                let text_ref = match content {
-                    Some(c) => Some(c),
-                    None => {
-                        if candidate.is_file() {
-                            disk_content = std::fs::read_to_string(&candidate).ok();
-                            disk_content.as_deref()
-                        } else {
-                            None
-                        }
-                    }
-                };
-
-                if let Some(content_text) = text_ref {
-                    let source_label = candidate
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(include_target);
-                    let inc_funcs = scan_user_functions(content_text, Some(source_label));
-                    all_functions.extend(inc_funcs);
-                }
+            let candidate = base_dir.join(include_target);
+            if !visited.insert(candidate.clone()) {
+                continue;
             }
+
+            let source_label = candidate
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(include_target);
+
+            scan_included_file(
+                &candidate,
+                source_label,
+                doc_cache,
+                all_functions,
+                visited,
+                depth,
+            );
         }
+    }
+}
+
+/// Resolves #include directives and aggregates function signatures with mtime caching.
+pub fn resolve_includes_and_scan(
+    uri: &str,
+    text: &str,
+    doc_cache: &HashMap<String, String>,
+) -> Vec<FunctionSignature> {
+    let mut all_functions = scan_user_functions(text, None);
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+
+    if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
+        scan_includes_in_text(text, &base_dir, doc_cache, &mut all_functions, &mut visited, 1);
     }
 
     all_functions
@@ -670,5 +755,26 @@ float calculateAttenuation(
         // Line 1 (0-indexed), after comma and space: col 28
         let call = find_enclosing_call(code, 1, 28);
         assert_eq!(call, Some(("calcualteNormal".to_string(), 1)));
+    }
+
+    #[test]
+    fn test_resolve_includes_live_cache() {
+        let mut doc_cache = HashMap::new();
+        let common_uri = "file:///project/shaders/common.glsl";
+        let common_code = r#"
+vec3 getFragPos(mat4 model, vec3 aPos) {
+    return vec3(model * vec4(aPos, 1.0));
+}
+"#;
+        doc_cache.insert(common_uri.to_string(), common_code.to_string());
+
+        let main_code = r#"
+#include "common.glsl"
+void main() {}
+"#;
+        let funcs = resolve_includes_and_scan("file:///project/shaders/main.frag", main_code, &doc_cache);
+        assert_eq!(funcs.len(), 2);
+        let common_fn = funcs.iter().find(|f| f.name == "getFragPos").expect("getFragPos found");
+        assert_eq!(common_fn.source, Some("common.glsl".to_string()));
     }
 }

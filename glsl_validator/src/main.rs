@@ -247,8 +247,26 @@ impl TargetApi {
 
     pub fn display_name(&self) -> &'static str {
         match self {
-            TargetApi::OpenGl => "OpenGL 4.6",
+            TargetApi::OpenGl => "OpenGL",
             TargetApi::Vulkan => "Vulkan",
+        }
+    }
+
+    pub fn display_label(&self, text: &str) -> String {
+        match self {
+            TargetApi::Vulkan => "glslangValidator (Vulkan)".to_string(),
+            TargetApi::OpenGl => {
+                for line in text.lines() {
+                    let trimmed = line.trim();
+                    if let Some(rest) = trimmed.strip_prefix("#version") {
+                        let ver = rest.trim();
+                        if !ver.is_empty() {
+                            return format!("glslangValidator (OpenGL {ver})");
+                        }
+                    }
+                }
+                "glslangValidator (OpenGL)".to_string()
+            }
         }
     }
 }
@@ -553,7 +571,7 @@ fn validate_shader(
         };
 
         let clean_msg = message.trim_start_matches("'' :").trim().to_string();
-        let source_label = format!("glslangValidator ({})", target.display_name());
+        let source_label = target.display_label(text);
 
         diagnostics.push(json!({
             "range": {
@@ -894,7 +912,7 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         return json!(items);
     }
 
-    // Check if user is typing a snippet prefix
+    // Extract word under/before cursor
     let mut word_start = prefix.len();
     for (i, c) in prefix.char_indices().rev() {
         if c.is_alphanumeric() || c == '_' {
@@ -904,15 +922,69 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         }
     }
     let word = &prefix[word_start..];
+
+    let mut items = Vec::new();
+
+    // 1. Snippets (if user is typing snippet prefix)
     if !word.is_empty() {
-        let snippets = generate_snippet_completions(word);
-        if !snippets.is_empty() {
-            log(&format!("Snippet completion triggered for word='{word}'"));
-            return json!(snippets);
+        items.extend(generate_snippet_completions(word));
+    }
+
+    // 2. User functions from current file and recursively included files (#include)
+    let user_funcs = signature::resolve_includes_and_scan(uri, doc, doc_cache);
+    let word_lower = word.to_lowercase();
+    for func in user_funcs {
+        if word.is_empty() || func.name.to_lowercase().starts_with(&word_lower) {
+            let detail = func.label.clone();
+            let doc_text = match (&func.source, &func.doc) {
+                (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
+                (Some(src), None) => format!("*Defined in `{src}`*"),
+                (None, Some(d)) => d.clone(),
+                (None, None) => String::new(),
+            };
+
+            if items.iter().any(|it| it["label"] == func.name) {
+                continue;
+            }
+
+            items.push(json!({
+                "label": func.name,
+                "kind": 3, // Function
+                "detail": detail,
+                "documentation": {
+                    "kind": "markdown",
+                    "value": doc_text,
+                },
+                "insertText": func.name,
+                "insertTextFormat": 1,
+                "sortText": format!("01_{}", func.name),
+            }));
         }
     }
 
-    json!([])
+    // 3. Built-in functions from docs.gl
+    for builtin in docs::get_all_builtins() {
+        if word.is_empty() || builtin.name.to_lowercase().starts_with(&word_lower) {
+            if items.iter().any(|it| it["label"] == builtin.name) {
+                continue;
+            }
+            let first_overload = builtin.overloads.first().map(|o| o.label).unwrap_or("");
+            items.push(json!({
+                "label": builtin.name,
+                "kind": 3, // Function
+                "detail": first_overload,
+                "documentation": {
+                    "kind": "markdown",
+                    "value": builtin.description,
+                },
+                "insertText": builtin.name,
+                "insertTextFormat": 1,
+                "sortText": format!("02_{}", builtin.name),
+            }));
+        }
+    }
+
+    json!(items)
 }
 
 static WARNED_CLANG_FORMAT: std::sync::atomic::AtomicBool =
@@ -2061,5 +2133,53 @@ mod tests {
 
         let fallback_glslang = find_glslang_validator(Some("non_existent_fake_path_xyz123"));
         assert!(fallback_glslang.is_some() || fallback_glslang.is_none());
+    }
+
+    #[test]
+    fn test_completion_include_and_builtins() {
+        let mut doc_cache = HashMap::new();
+        let common_uri = "file:///project/shaders/common.glsl";
+        let common_code = r#"
+vec3 calculateNormal(mat4 normal, vec3 aNormal) {
+    return mat3(normal) * aNormal;
+}
+"#;
+        doc_cache.insert(common_uri.to_string(), common_code.to_string());
+
+        let main_uri = "file:///project/shaders/main.frag";
+        let main_code = "#include \"common.glsl\"\nvec3 n = calc";
+        doc_cache.insert(main_uri.to_string(), main_code.to_string());
+
+        let req = json!({
+            "params": {
+                "textDocument": { "uri": main_uri },
+                "position": { "line": 1, "character": 13 }
+            }
+        });
+
+        let res = handle_completion(&req, &doc_cache);
+        let items = res.as_array().expect("items array");
+
+        // Should find calculateNormal from common.glsl
+        let calc_item = items.iter().find(|it| it["label"] == "calculateNormal");
+        assert!(calc_item.is_some(), "calculateNormal must be found in completions");
+        let item = calc_item.unwrap();
+        assert_eq!(item["kind"], 3); // Function
+        let doc_str = item["documentation"]["value"].as_str().unwrap();
+        assert!(doc_str.contains("common.glsl"));
+
+        // Built-in test: typing "norm"
+        let norm_code = "vec3 n = norm";
+        doc_cache.insert(main_uri.to_string(), norm_code.to_string());
+        let norm_req = json!({
+            "params": {
+                "textDocument": { "uri": main_uri },
+                "position": { "line": 0, "character": 13 }
+            }
+        });
+        let norm_res = handle_completion(&norm_req, &doc_cache);
+        let norm_items = norm_res.as_array().expect("norm items");
+        let norm_item = norm_items.iter().find(|it| it["label"] == "normalize");
+        assert!(norm_item.is_some(), "normalize must be found in completions");
     }
 }
