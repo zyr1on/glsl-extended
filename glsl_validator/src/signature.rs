@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 use serde_json::{json, Value};
 use crate::docs;
-use crate::uri_to_path;
+use crate::{path_to_uri, uri_to_path};
 
 const INVALID_TYPES: &[&str] = &[
     "return", "else", "case", "default", "discard", "break", "continue", "goto", "layout", "precision",
@@ -27,6 +27,9 @@ pub struct FunctionSignature {
     pub parameters: Vec<String>,
     pub doc: Option<String>,
     pub source: Option<String>,
+    pub line: usize,
+    pub col: usize,
+    pub file_uri: Option<String>,
 }
 
 /// Determines if a given cursor position (line, col) is inside a comment or string literal.
@@ -248,6 +251,9 @@ fn parse_function_header(
     header: &str,
     pending_doc: &[String],
     source_name: Option<&str>,
+    line_num: usize,
+    col_num: usize,
+    file_uri: Option<&str>,
 ) -> Option<FunctionSignature> {
     let open_paren = header.find('(')?;
     let close_paren = header.rfind(')')?;
@@ -286,31 +292,45 @@ fn parse_function_header(
         parameters,
         doc,
         source: source_name.map(|s| s.to_string()),
+        line: line_num,
+        col: col_num,
+        file_uri: file_uri.map(|s| s.to_string()),
     })
 }
 
 /// Parses function signatures from GLSL source text without allocating an entire lines vector.
-pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<FunctionSignature> {
+pub fn scan_user_functions(
+    text: &str,
+    source_name: Option<&str>,
+    file_uri: Option<&str>,
+) -> Vec<FunctionSignature> {
     let mut results = Vec::new();
     let mut pending_doc = Vec::new();
     let mut brace_level: usize = 0;
-    let mut multiline_header: Option<String> = None;
+    let mut multiline_header: Option<(usize, usize, String)> = None;
 
-    for raw_line in text.lines() {
+    for (line_idx, raw_line) in text.lines().enumerate() {
         let line = raw_line.trim();
 
         // Handle multi-line function declaration continuation
-        if let Some(mut header) = multiline_header.take() {
+        if let Some((start_line, start_col, mut header)) = multiline_header.take() {
             header.push(' ');
             header.push_str(line);
 
             if let Some(close_idx) = header.find(')') {
-                if let Some(sig) = parse_function_header(&header[..=close_idx], &pending_doc, source_name) {
+                if let Some(sig) = parse_function_header(
+                    &header[..=close_idx],
+                    &pending_doc,
+                    source_name,
+                    start_line,
+                    start_col,
+                    file_uri,
+                ) {
                     results.push(sig);
                 }
                 pending_doc.clear();
             } else {
-                multiline_header = Some(header);
+                multiline_header = Some((start_line, start_col, header));
             }
 
             for b in line.bytes() {
@@ -350,13 +370,21 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
                         && fn_name.chars().all(|c| c.is_alphanumeric() || c == '_');
 
                     if is_valid_name && !INVALID_NAMES.contains(&fn_name) && !INVALID_TYPES.contains(&return_type) {
+                        let col_idx = raw_line.find(fn_name).unwrap_or(0);
                         if let Some(close_idx) = line.find(')') {
-                            if let Some(sig) = parse_function_header(&line[..=close_idx], &pending_doc, source_name) {
+                            if let Some(sig) = parse_function_header(
+                                &line[..=close_idx],
+                                &pending_doc,
+                                source_name,
+                                line_idx,
+                                col_idx,
+                                file_uri,
+                            ) {
                                 results.push(sig);
                             }
                             pending_doc.clear();
                         } else {
-                            multiline_header = Some(line.to_string());
+                            multiline_header = Some((line_idx, col_idx, line.to_string()));
                         }
                     }
                 }
@@ -407,7 +435,7 @@ fn scan_included_file(
     let clean_path = candidate.to_string_lossy().replace('\\', "/");
     let candidate_uri = format!("file:///{}", clean_path.trim_start_matches('/'));
     if let Some(live_text) = doc_cache.get(&candidate_uri) {
-        let funcs = scan_user_functions(live_text, Some(source_label));
+        let funcs = scan_user_functions(live_text, Some(source_label), Some(&candidate_uri));
         all_functions.extend(funcs);
 
         if let Some(parent_dir) = candidate.parent() {
@@ -447,7 +475,8 @@ fn scan_included_file(
 
         // Cache miss: read from disk and cache
         if let Ok(disk_text) = std::fs::read_to_string(candidate) {
-            let funcs = scan_user_functions(&disk_text, Some(source_label));
+            let candidate_uri = path_to_uri(candidate);
+            let funcs = scan_user_functions(&disk_text, Some(source_label), Some(&candidate_uri));
             if let Ok(mut cache) = get_include_cache().lock() {
                 if cache.len() > 64 {
                     cache.clear();
@@ -510,7 +539,7 @@ pub fn resolve_includes_and_scan(
     text: &str,
     doc_cache: &HashMap<String, String>,
 ) -> Vec<FunctionSignature> {
-    let mut all_functions = scan_user_functions(text, None);
+    let mut all_functions = scan_user_functions(text, None, Some(uri));
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
     if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
@@ -732,6 +761,71 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
     json!(null)
 }
 
+/// Handles textDocument/definition requests.
+pub fn handle_definition(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
+    let params = match msg.get("params") {
+        Some(p) => p,
+        None => return Value::Null,
+    };
+
+    let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
+    let line_idx = params["position"]["line"].as_u64().unwrap_or(0) as usize;
+    let col_idx = params["position"]["character"].as_u64().unwrap_or(0) as usize;
+
+    let doc = match doc_cache.get(uri) {
+        Some(d) => d,
+        None => return Value::Null,
+    };
+
+    if is_in_comment_or_string(doc, line_idx, col_idx) {
+        return Value::Null;
+    }
+
+    let line = match doc.lines().nth(line_idx) {
+        Some(l) => l,
+        None => return Value::Null,
+    };
+
+    let max_col = col_idx.min(line.len());
+    let mut word_start = max_col;
+    for (i, c) in line[..max_col].char_indices().rev() {
+        if c.is_alphanumeric() || c == '_' {
+            word_start = i;
+        } else {
+            break;
+        }
+    }
+
+    let mut word_end = max_col;
+    for (i, c) in line[max_col..].char_indices() {
+        if c.is_alphanumeric() || c == '_' {
+            word_end = max_col + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if word_start >= word_end {
+        return Value::Null;
+    }
+    let word = &line[word_start..word_end];
+
+    let user_funcs = resolve_includes_and_scan(uri, doc, doc_cache);
+    if let Some(func) = user_funcs.iter().find(|f| f.name == word) {
+        if let Some(target_uri) = &func.file_uri {
+            return json!({
+                "uri": target_uri,
+                "range": {
+                    "start": { "line": func.line, "character": func.col },
+                    "end": { "line": func.line, "character": func.col + func.name.len() }
+                }
+            });
+        }
+    }
+
+    Value::Null
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,7 +869,7 @@ vec3 calcualteNormal(mat4 normal, vec3 aNormal){
     return mat3(normal) * aNormal;
 }
 "#;
-        let funcs = scan_user_functions(code, None);
+        let funcs = scan_user_functions(code, None, None);
         assert_eq!(funcs.len(), 3);
 
         assert_eq!(funcs[0].name, "calculateMVP");
@@ -825,7 +919,7 @@ float calculateAttenuation(
     return 1.0 / (constant + linear * distance + quadratic * distance * distance);
 }
 "#;
-        let funcs = scan_user_functions(code, None);
+        let funcs = scan_user_functions(code, None, None);
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "calculateAttenuation");
         assert_eq!(funcs[0].parameters.len(), 4);
@@ -900,5 +994,23 @@ vec3 b = "string literal";
         });
         let res = handle_signature_help(&req, &doc_cache);
         assert!(res.is_null());
+    }
+
+    #[test]
+    fn test_handle_definition() {
+        let mut doc_cache = HashMap::new();
+        let uri = "file:///shader.frag";
+        let code = "vec3 helper() { return vec3(1.0); }\nvoid main() { helper(); }";
+        doc_cache.insert(uri.to_string(), code.to_string());
+
+        let req = json!({
+            "params": {
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": 16 }
+            }
+        });
+        let res = handle_definition(&req, &doc_cache);
+        assert_eq!(res["uri"], uri);
+        assert_eq!(res["range"]["start"]["line"], 0);
     }
 }

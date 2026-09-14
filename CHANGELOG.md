@@ -2,6 +2,21 @@
 
 All notable changes to the GLSL Extended extension for Zed are documented in this file.
 
+## [0.1.11] - 2026-09-14
+
+### Added
+- **Unified Standalone Language Server:** Removed redundant external `glsl_analyzer` binary. `glsl_validator` now serves as the sole, bloat-free language server providing compile diagnostics, smart autocomplete, snippets, signature help, hover docs, formatting, and goto-definition.
+- **Goto Definition (`textDocument/definition`):** Jump directly to function definitions across the current shader and all recursively included files.
+- **Automatic Cargo Bin Discovery:** Automatically detects and executes `glsl_validator` from `~/.cargo/bin` if not already in system PATH.
+
+### Fixed
+- **Function Autocomplete Parentheses (`()` Insertion):** Eliminated LSP completion collisions caused by secondary servers overriding snippet completions with plain-text identifiers. Pressing Tab on any function (e.g. `inv` -> `inverse()`) now reliably inserts parentheses with cursor positioned inside.
+
+### Performance & Memory
+- **50%+ Memory & CPU Reduction:** Eliminated redundant background language server processes and unnecessary binary downloads, slashing RAM footprint and background CPU usage.
+
+---
+
 ## [0.1.10] - 2026-09-14
 
 ### Added

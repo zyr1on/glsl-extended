@@ -37,7 +37,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 ## Features
 
-- **Dual Language Server Architecture:** `glsl_analyzer` (navigation/definition) and `glsl_validator` (diagnostics/formatting/signatures).
+- **Unified Language Server:** `glsl_validator` handles compile diagnostics, smart autocomplete with snippets, signature help, hover docs, formatting, and goto-definition.
 - **Signature Help & docs.gl Hover:** Real-time parameter hints and built-in OpenGL 4.6 documentation summaries.
 - **Recursive `#include` Autocompletion:** Suggests functions across all included files; automatically suppressed in comments and strings.
 - **Dual Target API Validation:** Validates Desktop OpenGL (`#version 330 core` to `460 core`) and Vulkan SPIR-V with dynamic version labels.

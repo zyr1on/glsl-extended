@@ -378,6 +378,15 @@ pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(decoded))
 }
 
+pub fn path_to_uri(path: &Path) -> String {
+    let s = path.to_string_lossy().replace('\\', "/");
+    if s.starts_with('/') {
+        format!("file://{s}")
+    } else {
+        format!("file:///{s}")
+    }
+}
+
 pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(file_path) = uri_to_path(uri) {
@@ -1911,6 +1920,7 @@ fn main() -> io::Result<()> {
                                     "triggerCharacters": ["(", ","]
                                 },
                                 "hoverProvider": true,
+                                "definitionProvider": true,
                                 "documentFormattingProvider": true,
                                 "documentRangeFormattingProvider": true,
                                 "colorProvider": true
@@ -1936,6 +1946,16 @@ fn main() -> io::Result<()> {
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "result": hover_info
+                    });
+                    send_resp(&resp)?;
+                }
+                "textDocument/definition" => {
+                    let cache_lock = doc_cache.lock().map(|m| m.clone()).unwrap_or_default();
+                    let def_info = signature::handle_definition(&msg, &cache_lock);
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": def_info
                     });
                     send_resp(&resp)?;
                 }
