@@ -105,13 +105,76 @@ fn is_in_path(cmd: &str) -> bool {
     check.status().is_ok()
 }
 
-fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
+pub fn get_zed_extension_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(p) = exe_path.parent() {
+            dirs.push(p.to_path_buf());
+            if let Some(pp) = p.parent() {
+                dirs.push(pp.to_path_buf());
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+            let base = PathBuf::from(app_data).join("Zed").join("extensions");
+            dirs.push(base.join("work").join("glsl-extended"));
+            dirs.push(base.join("installed").join("glsl-extended"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let base = PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Zed")
+                .join("extensions");
+            dirs.push(base.join("work").join("glsl-extended"));
+            dirs.push(base.join("installed").join("glsl-extended"));
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            let base = PathBuf::from(xdg).join("zed").join("extensions");
+            dirs.push(base.join("work").join("glsl-extended"));
+            dirs.push(base.join("installed").join("glsl-extended"));
+        } else if let Ok(home) = std::env::var("HOME") {
+            let base = PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("zed")
+                .join("extensions");
+            dirs.push(base.join("work").join("glsl-extended"));
+            dirs.push(base.join("installed").join("glsl-extended"));
+        }
+    }
+
+    dirs
+}
+
+pub fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
+    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
+    let zed_dirs = get_zed_extension_dirs();
+
     // 1. Explicit user configuration from Zed settings.json
     if let Some(custom) = custom_path {
         let trimmed = custom.trim();
         if !trimmed.is_empty() {
             if Path::new(trimmed).is_file() {
                 return Some(trimmed.to_string());
+            }
+            for dir in &zed_dirs {
+                let cand = dir.join(trimmed);
+                if cand.is_file() {
+                    return Some(cand.to_string_lossy().to_string());
+                }
             }
             if let Some(p) = find_in_path(trimmed) {
                 return Some(p.to_string_lossy().to_string());
@@ -124,12 +187,19 @@ fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
 
     // 2. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
-        if Path::new(&env_path).exists() {
-            return Some(env_path);
+        let trimmed = env_path.trim();
+        if Path::new(trimmed).is_file() {
+            return Some(trimmed.to_string());
+        }
+        for dir in &zed_dirs {
+            let cand = dir.join(trimmed);
+            if cand.is_file() {
+                return Some(cand.to_string_lossy().to_string());
+            }
         }
     }
 
-    // 2. Primary: System PATH (universal across Windows, Linux, macOS)
+    // 3. Primary: System PATH (universal across Windows, Linux, macOS)
     if let Some(p) = find_in_path("glslangValidator") {
         return Some(p.to_string_lossy().to_string());
     }
@@ -143,46 +213,38 @@ fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
         return Some("glslang".to_string());
     }
 
-    // 3. Vulkan SDK standard environment variable
-    if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
-        let exe = if cfg!(windows) {
-            "glslangValidator.exe"
-        } else {
-            "glslangValidator"
-        };
-        let vk_bin = Path::new(&vk_sdk).join("bin").join(exe);
-        if vk_bin.is_file() {
-            return Some(vk_bin.to_string_lossy().to_string());
-        }
-    }
-
-    // 4. Check relative sibling directories (extracted by Zed extension)
-    if let Ok(exe_path) = std::env::current_exe() {
-        let search_dirs = [
-            exe_path.parent(),
-            exe_path.parent().and_then(|p| p.parent()),
+    // 4. Check Zed extension work & installed directories
+    for dir in &zed_dirs {
+        let direct_candidates = [
+            dir.join(format!("glslangValidator{exe_ext}")),
+            dir.join(format!("glslang{exe_ext}")),
+            dir.join("bin").join(format!("glslangValidator{exe_ext}")),
+            dir.join("bin").join(format!("glslang{exe_ext}")),
         ];
-        for dir in search_dirs.into_iter().flatten() {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir()
-                        && path
-                            .file_name()
-                            .is_some_and(|n| n.to_string_lossy().starts_with("glslang-"))
-                    {
-                        let bin_dir = path.join("bin");
-                        let exe_ext = if cfg!(windows) { ".exe" } else { "" };
-                        let candidates = [
-                            bin_dir.join(format!("glslangValidator{exe_ext}")),
-                            bin_dir.join(format!("glslang{exe_ext}")),
-                            path.join(format!("glslangValidator{exe_ext}")),
-                            path.join(format!("glslang{exe_ext}")),
-                        ];
-                        for cand in candidates {
-                            if cand.is_file() {
-                                return Some(cand.to_string_lossy().to_string());
-                            }
+        for cand in direct_candidates {
+            if cand.is_file() {
+                return Some(cand.to_string_lossy().to_string());
+            }
+        }
+
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir()
+                    && path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("glslang-"))
+                {
+                    let bin_dir = path.join("bin");
+                    let candidates = [
+                        bin_dir.join(format!("glslangValidator{exe_ext}")),
+                        bin_dir.join(format!("glslang{exe_ext}")),
+                        path.join(format!("glslangValidator{exe_ext}")),
+                        path.join(format!("glslang{exe_ext}")),
+                    ];
+                    for cand in candidates {
+                        if cand.is_file() {
+                            return Some(cand.to_string_lossy().to_string());
                         }
                     }
                 }
@@ -190,7 +252,15 @@ fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
         }
     }
 
-    // 4. Platform-specific fallback search paths
+    // 5. Vulkan SDK standard environment variable
+    if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
+        let vk_bin = Path::new(&vk_sdk).join("bin").join(format!("glslangValidator{exe_ext}"));
+        if vk_bin.is_file() {
+            return Some(vk_bin.to_string_lossy().to_string());
+        }
+    }
+
+    // 6. Platform-specific fallback search paths
     #[cfg(windows)]
     {
         let mut candidates = vec![
@@ -234,12 +304,21 @@ fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
 }
 
 pub fn find_glsl_analyzer(custom_path: Option<&str>) -> Option<String> {
+    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
+    let zed_dirs = get_zed_extension_dirs();
+
     // 1. Explicit user configuration from Zed settings.json
     if let Some(custom) = custom_path {
         let trimmed = custom.trim();
         if !trimmed.is_empty() {
             if Path::new(trimmed).is_file() {
                 return Some(trimmed.to_string());
+            }
+            for dir in &zed_dirs {
+                let cand = dir.join(trimmed);
+                if cand.is_file() {
+                    return Some(cand.to_string_lossy().to_string());
+                }
             }
             if let Some(p) = find_in_path(trimmed) {
                 return Some(p.to_string_lossy().to_string());
@@ -252,8 +331,15 @@ pub fn find_glsl_analyzer(custom_path: Option<&str>) -> Option<String> {
 
     // 2. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("GLSL_ANALYZER_PATH") {
-        if Path::new(&env_path).is_file() {
-            return Some(env_path);
+        let trimmed = env_path.trim();
+        if Path::new(trimmed).is_file() {
+            return Some(trimmed.to_string());
+        }
+        for dir in &zed_dirs {
+            let cand = dir.join(trimmed);
+            if cand.is_file() {
+                return Some(cand.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -265,46 +351,49 @@ pub fn find_glsl_analyzer(custom_path: Option<&str>) -> Option<String> {
         return Some("glsl_analyzer".to_string());
     }
 
-    // 4. User cargo bin directory (~/.cargo/bin/glsl_analyzer)
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-        let cargo_bin = PathBuf::from(home)
-            .join(".cargo")
-            .join("bin")
-            .join(format!("glsl_analyzer{exe}"));
-        if cargo_bin.is_file() {
-            return Some(cargo_bin.to_string_lossy().to_string());
-        }
-    }
-
-    // 5. Check relative sibling directories (extracted by Zed extension)
-    if let Ok(exe_path) = std::env::current_exe() {
-        let search_dirs = [
-            exe_path.parent(),
-            exe_path.parent().and_then(|p| p.parent()),
+    // 4. Check Zed extension work & installed directories
+    for dir in &zed_dirs {
+        let direct_candidates = [
+            dir.join(format!("glsl_analyzer{exe_ext}")),
+            dir.join("bin").join(format!("glsl_analyzer{exe_ext}")),
         ];
-        for dir in search_dirs.into_iter().flatten() {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir()
-                        && path
-                            .file_name()
-                            .is_some_and(|n| n.to_string_lossy().starts_with("glsl_analyzer-"))
-                    {
-                        let bin_dir = path.join("bin");
-                        let candidates = [
-                            bin_dir.join(format!("glsl_analyzer{exe}")),
-                            path.join(format!("glsl_analyzer{exe}")),
-                        ];
-                        for cand in candidates {
-                            if cand.is_file() {
-                                return Some(cand.to_string_lossy().to_string());
-                            }
+        for cand in direct_candidates {
+            if cand.is_file() {
+                return Some(cand.to_string_lossy().to_string());
+            }
+        }
+
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir()
+                    && path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("glsl_analyzer-"))
+                {
+                    let bin_dir = path.join("bin");
+                    let candidates = [
+                        bin_dir.join(format!("glsl_analyzer{exe_ext}")),
+                        path.join(format!("glsl_analyzer{exe_ext}")),
+                    ];
+                    for cand in candidates {
+                        if cand.is_file() {
+                            return Some(cand.to_string_lossy().to_string());
                         }
                     }
                 }
             }
+        }
+    }
+
+    // 5. User cargo bin directory (~/.cargo/bin/glsl_analyzer)
+    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        let cargo_bin = PathBuf::from(home)
+            .join(".cargo")
+            .join("bin")
+            .join(format!("glsl_analyzer{exe_ext}"));
+        if cargo_bin.is_file() {
+            return Some(cargo_bin.to_string_lossy().to_string());
         }
     }
 
@@ -583,6 +672,8 @@ fn extract_version_and_extensions(text: &str) -> Option<String> {
     Some(header)
 }
 
+static VERSION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
 /// Resolves the optimal GLSL version header for a shader or header file:
 /// 1. If the file has `#version`, returns None (no injection).
 /// 2. If user configured `default_version`, returns `#version <ver>\n#line 1\n`.
@@ -599,8 +690,25 @@ fn resolve_glsl_version_header(
 ) -> Option<String> {
     // 1. File already explicitly declares #version
     if text.lines().any(|l| l.trim().starts_with("#version")) {
+        if let Ok(mut lock) = VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+            lock.remove(uri);
+        }
         return None;
     }
+
+    // Check in-memory cache to prevent redundant disk reads while typing
+    if let Ok(lock) = VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+        if let Some(cached) = lock.get(uri) {
+            return Some(cached.clone());
+        }
+    }
+
+    let save_cache = |hdr: String| -> Option<String> {
+        if let Ok(mut lock) = VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+            lock.insert(uri.to_string(), hdr.clone());
+        }
+        Some(hdr)
+    };
 
     // 2. User configured default_version
     if let Some(cfg_ver) = configured_version {
@@ -611,7 +719,7 @@ fn resolve_glsl_version_header(
             } else {
                 format!("#version {trimmed}")
             };
-            return Some(format!("{ver_clean}\n#line 1\n"));
+            return save_cache(format!("{ver_clean}\n#line 1\n"));
         }
     }
 
@@ -630,7 +738,7 @@ fn resolve_glsl_version_header(
                 if trimmed.starts_with("#include") && trimmed.contains(&filename) {
                     if let Some(header) = extract_version_and_extensions(open_text) {
                         log(&format!("Resolved #version header from parent open document '{open_uri}' for '{uri}'"));
-                        return Some(header);
+                        return save_cache(header);
                     }
                 }
             }
@@ -656,7 +764,7 @@ fn resolve_glsl_version_header(
                     }
 
                     checked_count += 1;
-                    if checked_count > 32 {
+                    if checked_count > 16 {
                         break;
                     }
 
@@ -677,7 +785,7 @@ fn resolve_glsl_version_header(
                                     "Resolved #version header from sibling file '{}' for '{uri}'",
                                     path.display()
                                 ));
-                                return Some(header);
+                                return save_cache(header);
                             }
                         }
                     }
@@ -693,7 +801,7 @@ fn resolve_glsl_version_header(
                 log(&format!(
                     "Resolved project-wide #version from open document '{open_uri}' for '{uri}'"
                 ));
-                return Some(header);
+                return save_cache(header);
             }
         }
     }
@@ -706,7 +814,7 @@ fn resolve_glsl_version_header(
     log(&format!(
         "Using standard default fallback header for '{uri}'"
     ));
-    Some(default_header.to_string())
+    save_cache(default_header.to_string())
 }
 
 fn validate_shader(
@@ -721,7 +829,11 @@ fn validate_shader(
     let target = detect_target_api(text, default_target);
     let mut diagnostics = Vec::new();
 
-    let compiler = match find_glslang_validator(custom_glslang) {
+    let compiler = match custom_glslang
+        .filter(|p| Path::new(p).is_file())
+        .map(|p| p.to_string())
+        .or_else(|| find_glslang_validator(custom_glslang))
+    {
         Some(c) => c,
         None => {
             log("WARNING: glslangValidator not found on system.");
@@ -1780,7 +1892,7 @@ pub fn enhance_analyzer_completions(
 
     // 1. If swizzle triggered, prepend swizzles!
     if is_dot_access && !expr_before_dot.is_empty() {
-        let (_, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+        let user_vars = signature::scan_user_variables(doc, None, Some(uri));
         let dim = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot);
         let mut swizzles = generate_swizzle_completions(dim);
         if !member_word.is_empty() {
@@ -2439,33 +2551,10 @@ fn main() -> io::Result<()> {
     let doc_cache_worker = Arc::clone(&doc_cache);
     thread::spawn(move || {
         while let Ok(mut req) = rx_val.recv() {
-            // Drain queue so rapid keystrokes don't pile up redundant compilations
+            // Debounce delay: coalesce rapid keystrokes so glslang is NOT spawned on every letter!
+            thread::sleep(std::time::Duration::from_millis(120));
             while let Ok(newer) = rx_val.try_recv() {
                 if newer.uri == req.uri {
-                    req = newer;
-                } else {
-                    let diagnostics = {
-                        let cache = doc_cache_worker.lock().unwrap_or_else(|e| e.into_inner());
-                        validate_shader(
-                            &req.uri,
-                            &req.text,
-                            req.target,
-                            req.glslang_path.as_deref(),
-                            &cache,
-                            req.configured_version.as_deref(),
-                        )
-                    };
-                    let notif = json!({
-                        "jsonrpc": "2.0",
-                        "method": "textDocument/publishDiagnostics",
-                        "params": {
-                            "uri": req.uri,
-                            "diagnostics": diagnostics
-                        }
-                    });
-                    if let Ok(mut lock) = out_for_worker.lock() {
-                        let _ = send_lsp_message(&mut *lock, &notif);
-                    }
                     req = newer;
                 }
             }
@@ -2505,6 +2594,7 @@ fn main() -> io::Result<()> {
     let mut default_target = TargetApi::OpenGl;
     let mut default_engine = FormatterEngine::ClangFormat;
     let mut custom_glslang_path: Option<String> = None;
+    let mut cached_glslang_path: Option<String> = find_glslang_validator(None);
     let mut custom_analyzer_path: Option<String> = None;
     let mut custom_clang_path: Option<String> = None;
     let mut custom_default_version: Option<String> = None;
@@ -2579,6 +2669,7 @@ fn main() -> io::Result<()> {
                             let p = p.trim();
                             if !p.is_empty() {
                                 custom_glslang_path = Some(p.to_string());
+                                cached_glslang_path = find_glslang_validator(Some(p));
                                 log(&format!("Initialized with custom glslang_path={p}"));
                             }
                         }
@@ -2649,7 +2740,7 @@ fn main() -> io::Result<()> {
                     let sig_help = {
                         let mut bridge_sig = None;
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(res) = bridge.send_request("textDocument/signatureHelp", msg["params"].clone(), std::time::Duration::from_millis(200)) {
+                            if let Some(res) = bridge.send_request("textDocument/signatureHelp", msg["params"].clone(), std::time::Duration::from_millis(80)) {
                                 if !res.is_null() && res.get("signatures").and_then(|s| s.as_array()).is_some_and(|a| !a.is_empty()) {
                                     bridge_sig = Some(res);
                                 }
@@ -2673,7 +2764,7 @@ fn main() -> io::Result<()> {
                     let hover_info = {
                         let mut bridge_hover = None;
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(res) = bridge.send_request("textDocument/hover", msg["params"].clone(), std::time::Duration::from_millis(300)) {
+                            if let Some(res) = bridge.send_request("textDocument/hover", msg["params"].clone(), std::time::Duration::from_millis(100)) {
                                 if !res.is_null() && res.get("contents").is_some() {
                                     bridge_hover = Some(res);
                                 }
@@ -2697,7 +2788,7 @@ fn main() -> io::Result<()> {
                     let def_info = {
                         let mut bridge_def = None;
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(res) = bridge.send_request("textDocument/definition", msg["params"].clone(), std::time::Duration::from_millis(300)) {
+                            if let Some(res) = bridge.send_request("textDocument/definition", msg["params"].clone(), std::time::Duration::from_millis(100)) {
                                 if !res.is_null() && (res.as_array().is_some_and(|a| !a.is_empty()) || res.is_object()) {
                                     bridge_def = Some(res);
                                 }
@@ -2721,7 +2812,7 @@ fn main() -> io::Result<()> {
                     let items = {
                         let cache = doc_cache.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(bridge) = analyzer_bridge.as_ref() {
-                            if let Some(analyzer_res) = bridge.send_request("textDocument/completion", msg["params"].clone(), std::time::Duration::from_millis(400)) {
+                            if let Some(analyzer_res) = bridge.send_request("textDocument/completion", msg["params"].clone(), std::time::Duration::from_millis(150)) {
                                 enhance_analyzer_completions(&msg, analyzer_res, &cache)
                             } else {
                                 handle_completion(&msg, &cache)
@@ -2900,11 +2991,13 @@ fn main() -> io::Result<()> {
                         if !p.is_empty() {
                             if custom_glslang_path.as_deref() != Some(p) {
                                 custom_glslang_path = Some(p.to_string());
+                                cached_glslang_path = find_glslang_validator(Some(p));
                                 log(&format!("Updated custom_glslang_path={p}"));
                                 revalidate = true;
                             }
                         } else if custom_glslang_path.is_some() {
                             custom_glslang_path = None;
+                            cached_glslang_path = find_glslang_validator(None);
                             log("Reset custom_glslang_path to default");
                             revalidate = true;
                         }
@@ -3044,7 +3137,7 @@ fn main() -> io::Result<()> {
                         uri: uri.to_string(),
                         text: text.to_string(),
                         target: default_target,
-                        glslang_path: custom_glslang_path.clone(),
+                        glslang_path: cached_glslang_path.clone(),
                         configured_version: custom_default_version.clone(),
                     });
                 }
@@ -3066,7 +3159,7 @@ fn main() -> io::Result<()> {
                                     uri: uri.to_string(),
                                     text: text.to_string(),
                                     target: default_target,
-                                    glslang_path: custom_glslang_path.clone(),
+                                    glslang_path: cached_glslang_path.clone(),
                                     configured_version: custom_default_version.clone(),
                                 });
                             }
@@ -3087,7 +3180,7 @@ fn main() -> io::Result<()> {
                             uri: uri.to_string(),
                             text,
                             target: default_target,
-                            glslang_path: custom_glslang_path.clone(),
+                            glslang_path: cached_glslang_path.clone(),
                             configured_version: custom_default_version.clone(),
                         });
                     }
@@ -3387,6 +3480,21 @@ mod tests {
             find_in_path("sh").is_some()
         };
         assert!(cargo_found || cmd_or_sh);
+    }
+
+    #[test]
+    fn test_find_glsl_analyzer_and_glslang_zed_discovery() {
+        let analyzer = find_glsl_analyzer(None);
+        println!("find_glsl_analyzer: {:?}", analyzer);
+        let glslang = find_glslang_validator(None);
+        println!("find_glslang_validator: {:?}", glslang);
+        #[cfg(windows)]
+        {
+            if std::env::var("LOCALAPPDATA").is_ok() {
+                assert!(analyzer.is_some(), "glsl_analyzer should be discovered in Zed extensions directory");
+                assert!(glslang.is_some(), "glslang should be discovered in Zed extensions directory");
+            }
+        }
     }
 
     #[test]

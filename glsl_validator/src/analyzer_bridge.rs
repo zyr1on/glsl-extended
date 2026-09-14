@@ -153,3 +153,59 @@ impl AnalyzerBridge {
         resp.get("result").cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_analyzer_real_bridge() {
+        let p = match crate::find_glsl_analyzer(None) {
+            Some(p) => p,
+            None => return,
+        };
+        let bridge = AnalyzerBridge::start(&p).expect("start analyzer bridge");
+        let init_params = json!({
+            "processId": std::process::id(),
+            "rootUri": null,
+            "capabilities": {}
+        });
+        let t0 = std::time::Instant::now();
+        let init_res = bridge.send_request("initialize", init_params, Duration::from_secs(2));
+        println!("init time: {:?}", t0.elapsed());
+        println!("init res: {:?}", init_res);
+        assert!(init_res.is_some());
+        bridge.send_notification("initialized", json!({}));
+
+        let did_open = json!({
+            "textDocument": {
+                "uri": "file:///test.frag",
+                "languageId": "glsl",
+                "version": 1,
+                "text": "#version 460 core\nvoid main() {\n    vec4 myVec = vec4(1.0);\n    nor\n}\n"
+            }
+        });
+        bridge.send_notification("textDocument/didOpen", did_open);
+
+        let t1 = std::time::Instant::now();
+        let comp_res = bridge.send_request("textDocument/completion", json!({
+            "textDocument": { "uri": "file:///test.frag" },
+            "position": { "line": 3, "character": 7 }
+        }), Duration::from_secs(2));
+        println!("comp time: {:?}", t1.elapsed());
+
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("file:///test.frag".to_string(), "#version 460 core\nvoid main() {\n    vec4 myVec = vec4(1.0);\n    nor\n}\n".to_string());
+        let req = json!({
+            "params": {
+                "textDocument": { "uri": "file:///test.frag" },
+                "position": { "line": 3, "character": 7 }
+            }
+        });
+
+        let t2 = std::time::Instant::now();
+        let enhanced = crate::enhance_analyzer_completions(&req, comp_res.unwrap(), &doc_cache);
+        println!("enhance time: {:?}", t2.elapsed());
+        println!("enhanced count: {}", enhanced.as_array().map(|a| a.len()).unwrap_or(0));
+    }
+}
