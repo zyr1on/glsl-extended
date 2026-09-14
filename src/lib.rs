@@ -10,7 +10,7 @@
 
 use std::fs;
 use zed::settings::LspSettings;
-use zed_extension_api::{self as zed, serde_json, LanguageServerId, Result};
+use zed_extension_api::{self as zed, LanguageServerId, Result, serde_json};
 
 struct GlslExtendedExtension {
     cached_glsl_analyzer: Option<String>,
@@ -195,8 +195,7 @@ impl GlslExtendedExtension {
                 require_assets: true,
                 pre_release: false,
             },
-        )
-            && let Some(asset) = release.assets.iter().find(|a| a.name == asset_name)
+        ) && let Some(asset) = release.assets.iter().find(|a| a.name == asset_name)
         {
             let version_dir = format!("glsl_validator-{}", release.version);
             let candidate_root = format!("{version_dir}/glsl_validator{exe}");
