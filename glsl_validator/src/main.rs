@@ -2888,4 +2888,63 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
         assert_eq!(item["insertText"], "FragPos");
         assert_eq!(item["insertTextFormat"], 1);
     }
+
+    #[test]
+    fn test_vulkan_shader_validation_and_completion() {
+        let code = r#"#version 460
+// @target: vulkan
+
+layout(set = 0, binding = 0) uniform GlobalUbo {
+    mat4 projection;
+    mat4 view;
+    vec3 lightPos;
+} ubo;
+
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inNormal;
+layout(location = 0) out vec3 fragColor;
+
+void main() {
+    mat4 normalMatrix = transpose(inverse(ubo.view));
+    vec3 n = normalize(mat3(normalMatrix) * inNormal);
+    fragColor = n;
+    gl_Position = ubo.projection * ubo.view * vec4(inPosition, 1.0);
+}
+"#;
+        let cache = HashMap::new();
+        let diags = validate_shader(
+            "file:///shader.vert",
+            code,
+            TargetApi::Vulkan,
+            None,
+            &cache,
+            None,
+        );
+        let errors: Vec<_> = diags.iter().filter(|d| d["severity"] == 1).collect();
+        assert!(
+            errors.is_empty(),
+            "Vulkan shader should compile with 0 errors: {:?}",
+            errors
+        );
+
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("file:///shader.vert".to_string(), code.to_string());
+
+        let req = json!({
+            "params": {
+                "textDocument": { "uri": "file:///shader.vert" },
+                "position": { "line": 16, "character": 4 }
+            }
+        });
+        let res = handle_completion(&req, &doc_cache);
+        let items = res.as_array().expect("items array");
+        assert!(items.iter().any(|it| it["label"] == "ubo"));
+        assert!(items.iter().any(|it| it["label"] == "inPosition"));
+        assert!(items.iter().any(|it| it["label"] == "inNormal"));
+        assert!(items.iter().any(|it| it["label"] == "fragColor"));
+        assert!(items.iter().any(|it| it["label"] == "projection"));
+        assert!(items.iter().any(|it| it["label"] == "view"));
+        assert!(items.iter().any(|it| it["label"] == "transpose"));
+        assert!(items.iter().any(|it| it["label"] == "inverse"));
+    }
 }

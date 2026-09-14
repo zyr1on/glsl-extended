@@ -593,6 +593,8 @@ pub fn scan_user_variables(
     let mut pending_doc = Vec::new();
     let mut custom_types: HashSet<String> = HashSet::new();
     let mut brace_level: usize = 0;
+    let mut current_block_type: Option<String> = None;
+    let mut current_block_qualifier: String = "uniform".to_string();
 
     for (line_idx, raw_line) in text.lines().enumerate() {
         let line = raw_line.trim();
@@ -674,6 +676,53 @@ pub fn scan_user_variables(
             }
         }
 
+        // Interface blocks: [layout(...)] uniform/buffer BlockName { ... } [instanceName];
+        let after_layout = if let Some(layout_start) = line.find("layout") {
+            if let Some(paren_close) = line[layout_start..].find(')') {
+                line[layout_start + paren_close + 1..].trim()
+            } else {
+                line
+            }
+        } else {
+            line
+        };
+
+        if after_layout.contains('{') {
+            for qual in &["uniform", "buffer"] {
+                if let Some(pos) = after_layout.find(qual) {
+                    let before = &after_layout[..pos];
+                    if before.is_empty() || before.chars().last().is_none_or(|c| c.is_whitespace()) {
+                        let after = after_layout[pos + qual.len()..].trim_start();
+                        let block_name = after
+                            .split(|c: char| c.is_whitespace() || c == '{')
+                            .next()
+                            .unwrap_or("");
+                        if is_valid_identifier(block_name) && !INVALID_NAMES.contains(&block_name) {
+                            current_block_type = Some(block_name.to_string());
+                            current_block_qualifier = qual.to_string();
+                            custom_types.insert(block_name.to_string());
+                            let col = raw_line.find(block_name).unwrap_or(0);
+                            let doc_text = if pending_doc.is_empty() {
+                                None
+                            } else {
+                                Some(pending_doc.join(" "))
+                            };
+                            results.push(VariableSymbol {
+                                name: block_name.to_string(),
+                                var_type: qual.to_string(),
+                                qualifier: qual.to_string(),
+                                doc: doc_text,
+                                source: source_name.map(|s| s.to_string()),
+                                line: line_idx,
+                                col,
+                                file_uri: file_uri.map(|s| s.to_string()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         // Track braces
         let mut open_b = 0;
         let mut close_b = 0;
@@ -696,6 +745,40 @@ pub fn scan_user_variables(
         // Strip line comments
         if let Some(c_idx) = clean.find("//") {
             clean = clean[..c_idx].trim();
+        }
+
+        // Block instance: } instanceName; or } instanceName[N];
+        if let Some(brace_pos) = clean.find('}') {
+            let after_brace = clean[brace_pos + 1..].trim();
+            if after_brace.contains(';') {
+                let inst_part = after_brace.split(';').next().unwrap_or("").trim();
+                let inst_name = inst_part
+                    .split(|c: char| c.is_whitespace() || c == '[')
+                    .next()
+                    .unwrap_or("");
+                if is_valid_identifier(inst_name) && !INVALID_NAMES.contains(&inst_name) {
+                    let col = raw_line.rfind(inst_name).unwrap_or(0);
+                    let var_type = current_block_type
+                        .clone()
+                        .unwrap_or_else(|| "block".to_string());
+                    let qualifier = if current_block_qualifier.is_empty() {
+                        "uniform".to_string()
+                    } else {
+                        current_block_qualifier.clone()
+                    };
+                    results.push(VariableSymbol {
+                        name: inst_name.to_string(),
+                        var_type,
+                        qualifier,
+                        doc: None,
+                        source: source_name.map(|s| s.to_string()),
+                        line: line_idx,
+                        col,
+                        file_uri: file_uri.map(|s| s.to_string()),
+                    });
+                }
+            }
+            current_block_type = None;
         }
 
         // Check for variable declaration ending with ';' or '='
