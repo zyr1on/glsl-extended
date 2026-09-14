@@ -572,16 +572,15 @@ pub fn scan_user_variables(
             };
 
             if !is_fn && !stmt.is_empty() {
-                parse_variable_statement(
-                    stmt,
+                let ctx = VarParseContext {
                     raw_line,
                     line_idx,
-                    &pending_doc,
+                    pending_doc: &pending_doc,
                     source_name,
                     file_uri,
-                    &custom_types,
-                    &mut results,
-                );
+                    custom_types: &custom_types,
+                };
+                parse_variable_statement(stmt, &ctx, &mut results);
             }
         }
 
@@ -594,14 +593,18 @@ pub fn scan_user_variables(
     results
 }
 
+struct VarParseContext<'a> {
+    raw_line: &'a str,
+    line_idx: usize,
+    pending_doc: &'a [String],
+    source_name: Option<&'a str>,
+    file_uri: Option<&'a str>,
+    custom_types: &'a HashSet<String>,
+}
+
 fn parse_variable_statement(
     stmt: &str,
-    raw_line: &str,
-    line_idx: usize,
-    pending_doc: &[String],
-    source_name: Option<&str>,
-    file_uri: Option<&str>,
-    custom_types: &HashSet<String>,
+    ctx: &VarParseContext,
     results: &mut Vec<VariableSymbol>,
 ) {
     let tokens: Vec<&str> = stmt.split_whitespace().collect();
@@ -623,14 +626,14 @@ fn parse_variable_statement(
                 qualifier.push_str(clean_tok);
             }
         } else if KNOWN_BASE_TYPES.contains(&clean_tok)
-            || custom_types.contains(clean_tok)
+            || ctx.custom_types.contains(clean_tok)
             || (!qualifier.is_empty() && var_type.is_empty() && is_valid_identifier(clean_tok))
         {
             var_type = clean_tok.to_string();
             idents_start_idx = i + 1;
             break;
         } else if qualifier.is_empty() && i == 0 {
-            if KNOWN_BASE_TYPES.contains(&clean_tok) || custom_types.contains(clean_tok) {
+            if KNOWN_BASE_TYPES.contains(&clean_tok) || ctx.custom_types.contains(clean_tok) {
                 var_type = clean_tok.to_string();
                 idents_start_idx = 1;
                 break;
@@ -650,7 +653,7 @@ fn parse_variable_statement(
 
     let idents_slice = &tokens[idents_start_idx..];
     let remaining = idents_slice.join(" ");
-    let doc_text = if pending_doc.is_empty() { None } else { Some(pending_doc.join(" ")) };
+    let doc_text = if ctx.pending_doc.is_empty() { None } else { Some(ctx.pending_doc.join(" ")) };
 
     for part in remaining.split(',') {
         let part_trimmed = part.trim();
@@ -659,16 +662,16 @@ fn parse_variable_statement(
             .next()
             .unwrap_or("");
         if is_valid_identifier(var_name) && !INVALID_NAMES.contains(&var_name) && !INVALID_TYPES.contains(&var_name) {
-            let col = raw_line.find(var_name).unwrap_or(0);
+            let col = ctx.raw_line.find(var_name).unwrap_or(0);
             results.push(VariableSymbol {
                 name: var_name.to_string(),
                 var_type: var_type.clone(),
                 qualifier: qualifier.clone(),
                 doc: doc_text.clone(),
-                source: source_name.map(|s| s.to_string()),
-                line: line_idx,
+                source: ctx.source_name.map(|s| s.to_string()),
+                line: ctx.line_idx,
                 col,
-                file_uri: file_uri.map(|s| s.to_string()),
+                file_uri: ctx.file_uri.map(|s| s.to_string()),
             });
         }
     }
@@ -686,13 +689,17 @@ fn get_include_cache() -> &'static Mutex<HashMap<PathBuf, CacheEntry>> {
     INCLUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+struct IncludeScanContext<'a> {
+    doc_cache: &'a HashMap<String, String>,
+    all_functions: Option<&'a mut Vec<FunctionSignature>>,
+    all_variables: Option<&'a mut Vec<VariableSymbol>>,
+    visited: &'a mut HashSet<PathBuf>,
+}
+
 fn scan_included_file(
     candidate: &Path,
     source_label: &str,
-    doc_cache: &HashMap<String, String>,
-    mut all_functions: Option<&mut Vec<FunctionSignature>>,
-    mut all_variables: Option<&mut Vec<VariableSymbol>>,
-    visited: &mut HashSet<PathBuf>,
+    ctx: &mut IncludeScanContext,
     depth: usize,
 ) {
     if depth > 8 {
@@ -702,18 +709,18 @@ fn scan_included_file(
     // 1. If currently open in Zed editor buffer: parse live content (0 disk I/O)
     let clean_path = candidate.to_string_lossy().replace('\\', "/");
     let candidate_uri = format!("file:///{}", clean_path.trim_start_matches('/'));
-    if let Some(live_text) = doc_cache.get(&candidate_uri) {
-        if let Some(ref mut funcs_out) = all_functions {
+    if let Some(live_text) = ctx.doc_cache.get(&candidate_uri) {
+        if let Some(ref mut funcs_out) = ctx.all_functions {
             let funcs = scan_user_functions(live_text, Some(source_label), Some(&candidate_uri));
             funcs_out.extend(funcs);
         }
-        if let Some(ref mut vars_out) = all_variables {
+        if let Some(ref mut vars_out) = ctx.all_variables {
             let vars = scan_user_variables(live_text, Some(source_label), Some(&candidate_uri));
             vars_out.extend(vars);
         }
 
         if let Some(parent_dir) = candidate.parent() {
-            scan_includes_in_text(live_text, parent_dir, doc_cache, all_functions, all_variables, visited, depth + 1);
+            scan_includes_in_text(live_text, parent_dir, ctx, depth + 1);
         }
         return;
     }
@@ -743,10 +750,10 @@ fn scan_included_file(
         };
 
         if let Some((funcs, vars)) = cached {
-            if let Some(ref mut funcs_out) = all_functions {
+            if let Some(ref mut funcs_out) = ctx.all_functions {
                 funcs_out.extend(funcs);
             }
-            if let Some(ref mut vars_out) = all_variables {
+            if let Some(ref mut vars_out) = ctx.all_variables {
                 vars_out.extend(vars);
             }
             return;
@@ -767,15 +774,15 @@ fn scan_included_file(
                     variables: vars.clone(),
                 });
             }
-            if let Some(ref mut funcs_out) = all_functions {
+            if let Some(ref mut funcs_out) = ctx.all_functions {
                 funcs_out.extend(funcs);
             }
-            if let Some(ref mut vars_out) = all_variables {
+            if let Some(ref mut vars_out) = ctx.all_variables {
                 vars_out.extend(vars);
             }
 
             if let Some(parent_dir) = candidate.parent() {
-                scan_includes_in_text(&disk_text, parent_dir, doc_cache, all_functions, all_variables, visited, depth + 1);
+                scan_includes_in_text(&disk_text, parent_dir, ctx, depth + 1);
             }
         }
     }
@@ -784,10 +791,7 @@ fn scan_included_file(
 fn scan_includes_in_text(
     text: &str,
     base_dir: &Path,
-    doc_cache: &HashMap<String, String>,
-    mut all_functions: Option<&mut Vec<FunctionSignature>>,
-    mut all_variables: Option<&mut Vec<VariableSymbol>>,
-    visited: &mut HashSet<PathBuf>,
+    ctx: &mut IncludeScanContext,
     depth: usize,
 ) {
     for line in text.lines() {
@@ -799,7 +803,7 @@ fn scan_includes_in_text(
             }
 
             let candidate = base_dir.join(include_target);
-            if !visited.insert(candidate.clone()) {
+            if !ctx.visited.insert(candidate.clone()) {
                 continue;
             }
 
@@ -808,16 +812,10 @@ fn scan_includes_in_text(
                 .and_then(|n| n.to_str())
                 .unwrap_or(include_target);
 
-            let funcs_arg = all_functions.as_deref_mut();
-            let vars_arg = all_variables.as_deref_mut();
-
             scan_included_file(
                 &candidate,
                 source_label,
-                doc_cache,
-                funcs_arg,
-                vars_arg,
-                visited,
+                ctx,
                 depth,
             );
         }
@@ -834,7 +832,13 @@ pub fn resolve_includes_and_scan(
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
     if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
-        scan_includes_in_text(text, &base_dir, doc_cache, Some(&mut all_functions), None, &mut visited, 1);
+        let mut ctx = IncludeScanContext {
+            doc_cache,
+            all_functions: Some(&mut all_functions),
+            all_variables: None,
+            visited: &mut visited,
+        };
+        scan_includes_in_text(text, &base_dir, &mut ctx, 1);
     }
 
     all_functions
@@ -850,7 +854,13 @@ pub fn resolve_includes_and_scan_variables(
     let mut visited: HashSet<PathBuf> = HashSet::new();
 
     if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
-        scan_includes_in_text(text, &base_dir, doc_cache, None, Some(&mut all_variables), &mut visited, 1);
+        let mut ctx = IncludeScanContext {
+            doc_cache,
+            all_functions: None,
+            all_variables: Some(&mut all_variables),
+            visited: &mut visited,
+        };
+        scan_includes_in_text(text, &base_dir, &mut ctx, 1);
     }
 
     all_variables
