@@ -10,7 +10,7 @@
 
 use std::fs;
 use zed::settings::LspSettings;
-use zed_extension_api::{self as zed, LanguageServerId, Result, serde_json};
+use zed_extension_api::{self as zed, serde_json, LanguageServerId, Result};
 
 struct GlslExtendedExtension {
     cached_glsl_analyzer: Option<String>,
@@ -68,7 +68,11 @@ impl GlslExtendedExtension {
             .ok_or_else(|| format!("Asset '{asset_name}' not found in glsl_analyzer release"))?;
 
         let version_dir = format!("glsl_analyzer-{}", release.version);
-        let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
+        let exe = if matches!(platform, zed::Os::Windows) {
+            ".exe"
+        } else {
+            ""
+        };
         let candidate_bin = format!("{version_dir}/bin/glsl_analyzer{exe}");
         let candidate_root = format!("{version_dir}/glsl_analyzer{exe}");
 
@@ -129,7 +133,11 @@ impl GlslExtendedExtension {
         let (platform, arch) = zed::current_platform();
 
         // 3) Check user cargo bin directory (~/.cargo/bin/glsl_validator)
-        let exe = if matches!(platform, zed::Os::Windows) { ".exe" } else { "" };
+        let exe = if matches!(platform, zed::Os::Windows) {
+            ".exe"
+        } else {
+            ""
+        };
         if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             let cargo_bin = format!("{home}/.cargo/bin/glsl_validator{exe}");
             if fs::metadata(&cargo_bin).is_ok_and(|s| s.is_file()) {
@@ -145,10 +153,9 @@ impl GlslExtendedExtension {
                 "C:\\msys64\\mingw64\\bin\\glsl_validator.exe",
                 "C:\\msys64\\clang64\\bin\\glsl_validator.exe",
             ],
-            zed::Os::Linux | zed::Os::Mac => &[
-                "/usr/local/bin/glsl_validator",
-                "/usr/bin/glsl_validator",
-            ],
+            zed::Os::Linux | zed::Os::Mac => {
+                &["/usr/local/bin/glsl_validator", "/usr/bin/glsl_validator"]
+            }
         };
         for fallback in fallbacks {
             if fs::metadata(fallback).is_ok_and(|s| s.is_file()) {
@@ -157,7 +164,11 @@ impl GlslExtendedExtension {
         }
 
         // 5) Try downloading pre-built binary from repository GitHub Releases
-        let ext = if matches!(platform, zed::Os::Windows) { "zip" } else { "tar.gz" };
+        let ext = if matches!(platform, zed::Os::Windows) {
+            "zip"
+        } else {
+            "tar.gz"
+        };
         let file_type = if matches!(platform, zed::Os::Windows) {
             zed::DownloadedFileType::Zip
         } else {
@@ -168,12 +179,12 @@ impl GlslExtendedExtension {
             "glsl_validator-{arch}-{os}.{ext}",
             arch = match arch {
                 zed::Architecture::Aarch64 => "aarch64",
-                zed::Architecture::X86    => "x86",
-                zed::Architecture::X8664  => "x86_64",
+                zed::Architecture::X86 => "x86",
+                zed::Architecture::X8664 => "x86_64",
             },
             os = match platform {
-                zed::Os::Mac     => "macos",
-                zed::Os::Linux   => "linux",
+                zed::Os::Mac => "macos",
+                zed::Os::Linux => "linux",
                 zed::Os::Windows => "windows",
             }
         );

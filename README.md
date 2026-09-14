@@ -37,9 +37,11 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 ## Features
 
-- **Unified Language Server:** `glsl_validator` handles compile diagnostics, smart autocomplete with snippets, signature help, hover docs, formatting, and goto-definition.
-- **Signature Help & docs.gl Hover:** Real-time parameter hints and built-in OpenGL 4.6 documentation summaries.
-- **Recursive `#include` Autocompletion:** Suggests functions across all included files; automatically suppressed in comments and strings.
+- **Unified Language Server:** `glsl_validator` provides compile diagnostics, variable/function autocompletion with snippets, signature help, hover docs, formatting, and goto-definition.
+- **Smart Variable & Function Autocompletion:** Autocompletes user variables (`out vec3 FragPos`, `in`, `uniform`, `struct`, `const`, `#define`) and functions with automatic `()` parentheses placement.
+- **Goto Definition (`F12`):** Jump directly to definitions of functions, structs, and variables across current and `#include` files.
+- **Signature Help & docs.gl Hover:** Real-time parameter hints and built-in OpenGL 4.6 documentation summaries with parameter specs.
+- **Recursive `#include` Navigation:** Suggests functions, variables, and structs across all included files; automatically suppressed in comments and strings.
 - **Dual Target API Validation:** Validates Desktop OpenGL (`#version 330 core` to `460 core`) and Vulkan SPIR-V with dynamic version labels.
 - **Smart Vector Swizzling:** Context-aware `.xyzw`, `.rgba`, and `.stpq` swizzle completions on vectors.
 - **GLSL Boilerplate Snippets:** Generic templates for `ubo`, `ssbo`, shaders, structs, and functions.

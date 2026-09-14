@@ -1,6 +1,7 @@
 pub mod docs;
 pub mod signature;
 
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Read, Write};
@@ -8,7 +9,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use serde_json::{json, Value};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+fn create_command<S: AsRef<std::ffi::OsStr>>(prog: S) -> Command {
+    let mut cmd = Command::new(prog);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    cmd
+}
 
 fn get_log_path() -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -80,7 +90,7 @@ fn is_in_path(cmd: &str) -> bool {
     if find_in_path(cmd).is_some() {
         return true;
     }
-    let mut check = Command::new(cmd);
+    let mut check = create_command(cmd);
     check.arg("--version");
     check.stdout(Stdio::null());
     check.stderr(Stdio::null());
@@ -274,7 +284,8 @@ impl TargetApi {
 pub fn detect_target_api(text: &str, default_target: TargetApi) -> TargetApi {
     for line in text.lines().take(10) {
         let trimmed = line.trim();
-        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("#pragma") {
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("#pragma")
+        {
             let lower = trimmed.to_lowercase();
             if lower.contains("@target: vulkan")
                 || lower.contains("@target:vulkan")
@@ -321,7 +332,8 @@ impl FormatterEngine {
 pub fn detect_formatter_engine(text: &str, default_engine: FormatterEngine) -> FormatterEngine {
     for line in text.lines().take(10) {
         let trimmed = line.trim();
-        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("#pragma") {
+        if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("#pragma")
+        {
             let lower = trimmed.to_lowercase();
             if lower.contains("@formatter: clang-format")
                 || lower.contains("@formatter:clang-format")
@@ -485,9 +497,7 @@ fn resolve_glsl_version_header(
 
     let filename = uri_to_path(uri)
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_else(|| {
-            uri.rsplit(['/', '\\']).next().unwrap_or("").to_string()
-        });
+        .unwrap_or_else(|| uri.rsplit(['/', '\\']).next().unwrap_or("").to_string());
 
     // 3. Step A: Check in-memory open documents (doc_cache) for parent files including this file
     if !filename.is_empty() {
@@ -518,7 +528,10 @@ fn resolve_glsl_version_header(
                         continue;
                     }
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if !matches!(ext, "vert" | "frag" | "geom" | "comp" | "tesc" | "tese" | "glsl") {
+                    if !matches!(
+                        ext,
+                        "vert" | "frag" | "geom" | "comp" | "tesc" | "tese" | "glsl"
+                    ) {
                         continue;
                     }
 
@@ -535,10 +548,15 @@ fn resolve_glsl_version_header(
                         }
                         let sibling_text = first_lines.join("\n");
                         if !filename.is_empty()
-                            && sibling_text.lines().any(|l| l.trim().starts_with("#include") && l.contains(&filename))
+                            && sibling_text
+                                .lines()
+                                .any(|l| l.trim().starts_with("#include") && l.contains(&filename))
                         {
                             if let Some(header) = extract_version_and_extensions(&sibling_text) {
-                                log(&format!("Resolved #version header from sibling file '{}' for '{uri}'", path.display()));
+                                log(&format!(
+                                    "Resolved #version header from sibling file '{}' for '{uri}'",
+                                    path.display()
+                                ));
                                 return Some(header);
                             }
                         }
@@ -552,7 +570,9 @@ fn resolve_glsl_version_header(
     for (open_uri, open_text) in doc_cache {
         if open_uri != uri {
             if let Some(header) = extract_version_and_extensions(open_text) {
-                log(&format!("Resolved project-wide #version from open document '{open_uri}' for '{uri}'"));
+                log(&format!(
+                    "Resolved project-wide #version from open document '{open_uri}' for '{uri}'"
+                ));
                 return Some(header);
             }
         }
@@ -563,7 +583,9 @@ fn resolve_glsl_version_header(
         TargetApi::OpenGl => "#version 460 core\n#line 1\n",
         TargetApi::Vulkan => "#version 460\n#line 1\n",
     };
-    log(&format!("Using standard default fallback header for '{uri}'"));
+    log(&format!(
+        "Using standard default fallback header for '{uri}'"
+    ));
     Some(default_header.to_string())
 }
 
@@ -604,53 +626,57 @@ fn validate_shader(
         inc_dirs.len()
     ));
 
-    let version_header = resolve_glsl_version_header(uri, text, target, doc_cache, configured_version)
-        .unwrap_or_default();
+    let version_header =
+        resolve_glsl_version_header(uri, text, target, doc_cache, configured_version)
+            .unwrap_or_default();
     let input_text = if !version_header.is_empty() {
         format!("{version_header}{text}")
     } else {
         text.to_string()
     };
 
-    let (compile_text, pre_output) = if target == TargetApi::OpenGl && input_text.contains("#include") {
-        log(&format!("Preprocessing '#include' directives for OpenGL target using '{compiler}'"));
-        let mut prep_cmd = Command::new(&compiler);
-        prep_cmd.args(["--stdin", "-E", "-S", stage]);
-        for inc in &inc_dirs {
-            prep_cmd.arg(format!("-I{}", inc.display()));
-        }
-        if let Ok(mut child) = prep_cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(input_text.as_bytes());
+    let (compile_text, pre_output) =
+        if target == TargetApi::OpenGl && input_text.contains("#include") {
+            log(&format!(
+                "Preprocessing '#include' directives for OpenGL target using '{compiler}'"
+            ));
+            let mut prep_cmd = create_command(&compiler);
+            prep_cmd.args(["--stdin", "-E", "-S", stage]);
+            for inc in &inc_dirs {
+                prep_cmd.arg(format!("-I{}", inc.display()));
             }
-            if let Ok(output) = child.wait_with_output() {
-                if !output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    (input_text.clone(), Some(format!("{}\n{}", stdout, stderr)))
+            if let Ok(mut child) = prep_cmd
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(input_text.as_bytes());
+                }
+                if let Ok(output) = child.wait_with_output() {
+                    if !output.status.success() {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        (input_text.clone(), Some(format!("{}\n{}", stdout, stderr)))
+                    } else {
+                        let preprocessed = String::from_utf8_lossy(&output.stdout).to_string();
+                        (preprocessed, None)
+                    }
                 } else {
-                    let preprocessed = String::from_utf8_lossy(&output.stdout).to_string();
-                    (preprocessed, None)
+                    (input_text.clone(), None)
                 }
             } else {
                 (input_text.clone(), None)
             }
         } else {
-            (input_text.clone(), None)
-        }
-    } else {
-        (input_text, None)
-    };
+            (input_text, None)
+        };
 
     let full_output = if let Some(err_output) = pre_output {
         err_output
     } else {
-        let mut cmd = Command::new(&compiler);
+        let mut cmd = create_command(&compiler);
         cmd.args(["--stdin", target.flag(), "--error-column", "-S", stage]);
         for inc in &inc_dirs {
             cmd.arg(format!("-I{}", inc.display()));
@@ -685,7 +711,10 @@ fn validate_shader(
         let stderr = String::from_utf8_lossy(&output.stderr);
         format!("{}\n{}", stdout, stderr)
     };
-    log(&format!("Validation output lines: {}", full_output.lines().count()));
+    log(&format!(
+        "Validation output lines: {}",
+        full_output.lines().count()
+    ));
 
     for raw_line in full_output.lines() {
         let line = raw_line.trim();
@@ -728,7 +757,11 @@ fn validate_shader(
         let (start_col, end_col, message) = if parts.len() == 4 {
             if let Ok(c) = parts[2].trim().parse::<u32>() {
                 let col = c.saturating_sub(1);
-                (col, col.saturating_add(4).max(col + 1), parts[3].trim().to_string())
+                (
+                    col,
+                    col.saturating_add(4).max(col + 1),
+                    parts[3].trim().to_string(),
+                )
             } else {
                 (0, 999, format!("{}: {}", parts[2].trim(), parts[3].trim()))
             }
@@ -750,7 +783,10 @@ fn validate_shader(
         }));
     }
 
-    log(&format!("Found {} diagnostic(s) for '{uri}'", diagnostics.len()));
+    log(&format!(
+        "Found {} diagnostic(s) for '{uri}'",
+        diagnostics.len()
+    ));
     diagnostics
 }
 
@@ -777,7 +813,9 @@ pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
     // 2. Built-in GLSL vector variables
     match last {
         "gl_Position" | "gl_FragCoord" | "gl_FragColor" | "gl_Vertex" | "gl_Color" => return 4,
-        "gl_Normal" | "gl_GlobalInvocationID" | "gl_LocalInvocationID" | "gl_WorkGroupID" => return 3,
+        "gl_Normal" | "gl_GlobalInvocationID" | "gl_LocalInvocationID" | "gl_WorkGroupID" => {
+            return 3
+        }
         "gl_PointCoord" => return 2,
         _ => {}
     }
@@ -792,8 +830,14 @@ pub fn infer_vector_dimension(doc: &str, expr: &str) -> usize {
         if let Some(idx) = line.find(last) {
             let before = &line[..idx];
             let after = &line[idx + last.len()..];
-            let before_ok = before.chars().last().is_none_or(|c| !c.is_alphanumeric() && c != '_');
-            let after_ok = after.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            let before_ok = before
+                .chars()
+                .last()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            let after_ok = after
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
 
             if before_ok && after_ok {
                 if before.contains("vec4") {
@@ -1023,7 +1067,9 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
 
     snippets
         .iter()
-        .filter(|(prefix, _, _, _)| query.is_empty() || starts_with_ignore_ascii_case(prefix, query))
+        .filter(|(prefix, _, _, _)| {
+            query.is_empty() || starts_with_ignore_ascii_case(prefix, query)
+        })
         .map(|(prefix, detail, body, doc)| {
             json!({
                 "label": prefix,
@@ -1067,7 +1113,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         if line.is_char_boundary(max_col) {
             max_col
         } else {
-            (0..=max_col).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0)
+            (0..=max_col)
+                .rev()
+                .find(|&i| line.is_char_boundary(i))
+                .unwrap_or(0)
         }
     };
     let prefix = &line[..safe_col];
@@ -1089,7 +1138,9 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
             return json!([]);
         }
 
-        log(&format!("Swizzle completion triggered for expr='{expr}' at line={line_idx}, col={col_idx}"));
+        log(&format!(
+            "Swizzle completion triggered for expr='{expr}' at line={line_idx}, col={col_idx}"
+        ));
 
         let dim = infer_vector_dimension(doc, expr);
         let items = generate_swizzle_completions(dim);
@@ -1139,9 +1190,9 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
             }
 
             let kind = match var.qualifier.as_str() {
-                "struct" => 22, // Struct
+                "struct" => 22,            // Struct
                 "const" | "#define" => 21, // Constant
-                _ => 6, // Variable
+                _ => 6,                    // Variable
             };
 
             let detail = format!("{} {}", var.qualifier, var.var_type);
@@ -1320,7 +1371,9 @@ fn find_clang_format(custom_path: Option<&str>) -> Option<String> {
             "C:\\tools\\llvm\\bin\\clang-format.exe".to_string(),
         ];
         if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
-            candidates.push(format!("{local_app}\\Programs\\LLVM\\bin\\clang-format.exe"));
+            candidates.push(format!(
+                "{local_app}\\Programs\\LLVM\\bin\\clang-format.exe"
+            ));
         }
         if let Ok(user_profile) = std::env::var("USERPROFILE") {
             candidates.push(format!("{user_profile}\\scoop\\shims\\clang-format.exe"));
@@ -1552,8 +1605,10 @@ pub fn format_document(
                     "shader.glsl".to_string()
                 };
 
-                log(&format!("Formatting doc '{uri}' using clang-format='{clang_format}'"));
-                if let Ok(mut child) = Command::new(&clang_format)
+                log(&format!(
+                    "Formatting doc '{uri}' using clang-format='{clang_format}'"
+                ));
+                if let Ok(mut child) = create_command(&clang_format)
                     .args([format!("--assume-filename={filename}")])
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
@@ -1578,7 +1633,9 @@ pub fn format_document(
             })
         }
         FormatterEngine::Builtin => {
-            log(&format!("Formatting doc '{uri}' using built-in pure-Rust formatter"));
+            log(&format!(
+                "Formatting doc '{uri}' using built-in pure-Rust formatter"
+            ));
             basic_glsl_format(text, tab_size, insert_spaces)
         }
     };
@@ -1667,9 +1724,13 @@ pub fn find_colors_in_text(text: &str) -> Vec<ColorItem> {
                 let args_str = &line[args_start..args_start + close_idx];
                 let mut parts = args_str.split(',');
                 if is_v4 {
-                    if let (Some(t0), Some(t1), Some(t2), Some(t3), None) =
-                        (parts.next(), parts.next(), parts.next(), parts.next(), parts.next())
-                    {
+                    if let (Some(t0), Some(t1), Some(t2), Some(t3), None) = (
+                        parts.next(),
+                        parts.next(),
+                        parts.next(),
+                        parts.next(),
+                        parts.next(),
+                    ) {
                         if let (Some(r), Some(g), Some(b), Some(a)) = (
                             parse_color_token(t0),
                             parse_color_token(t1),
@@ -1833,8 +1894,18 @@ fn main() -> io::Result<()> {
                 if newer.uri == req.uri {
                     req = newer;
                 } else {
-                    let cache = doc_cache_worker.lock().map(|m| m.clone()).unwrap_or_default();
-                    let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref(), &cache, req.configured_version.as_deref());
+                    let cache = doc_cache_worker
+                        .lock()
+                        .map(|m| m.clone())
+                        .unwrap_or_default();
+                    let diagnostics = validate_shader(
+                        &req.uri,
+                        &req.text,
+                        req.target,
+                        req.glslang_path.as_deref(),
+                        &cache,
+                        req.configured_version.as_deref(),
+                    );
                     let notif = json!({
                         "jsonrpc": "2.0",
                         "method": "textDocument/publishDiagnostics",
@@ -1850,8 +1921,18 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            let cache = doc_cache_worker.lock().map(|m| m.clone()).unwrap_or_default();
-            let diagnostics = validate_shader(&req.uri, &req.text, req.target, req.glslang_path.as_deref(), &cache, req.configured_version.as_deref());
+            let cache = doc_cache_worker
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_default();
+            let diagnostics = validate_shader(
+                &req.uri,
+                &req.text,
+                req.target,
+                req.glslang_path.as_deref(),
+                &cache,
+                req.configured_version.as_deref(),
+            );
             let notif = json!({
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
@@ -1922,7 +2003,10 @@ fn main() -> io::Result<()> {
         let id = msg.get("id");
 
         if let Some(req_id) = id {
-            log(&format!("Handling request id={:?}, method='{method}'", req_id));
+            log(&format!(
+                "Handling request id={:?}, method='{method}'",
+                req_id
+            ));
             match method {
                 "initialize" => {
                     if let Some(opts) = msg["params"].get("initializationOptions") {
@@ -1932,10 +2016,16 @@ fn main() -> io::Result<()> {
                         }
                         if let Some(f) = opts.get("formatter").and_then(|v| v.as_str()) {
                             default_engine = FormatterEngine::parse_engine(f);
-                            log(&format!("Initialized with formatter engine={:?}", default_engine));
+                            log(&format!(
+                                "Initialized with formatter engine={:?}",
+                                default_engine
+                            ));
                         }
-                        if let Some(p) = opts.get("glslang_validator_path").and_then(|v| v.as_str())
-                            .or_else(|| opts.get("glslang_path").and_then(|v| v.as_str())) {
+                        if let Some(p) = opts
+                            .get("glslang_validator_path")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| opts.get("glslang_path").and_then(|v| v.as_str()))
+                        {
                             custom_glslang_path = Some(p.to_string());
                             log(&format!("Initialized with custom glslang_path={p}"));
                         }
@@ -2015,7 +2105,15 @@ fn main() -> io::Result<()> {
                     let options = msg["params"].get("options");
                     let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
                     let edits = cached_text
-                        .and_then(|text| format_document(uri, &text, options, default_engine, custom_clang_path.as_deref()))
+                        .and_then(|text| {
+                            format_document(
+                                uri,
+                                &text,
+                                options,
+                                default_engine,
+                                custom_clang_path.as_deref(),
+                            )
+                        })
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -2030,7 +2128,16 @@ fn main() -> io::Result<()> {
                     let range = msg["params"].get("range");
                     let cached_text = doc_cache.lock().ok().and_then(|m| m.get(uri).cloned());
                     let edits = cached_text
-                        .and_then(|text| format_range(uri, &text, range, options, default_engine, custom_clang_path.as_deref()))
+                        .and_then(|text| {
+                            format_range(
+                                uri,
+                                &text,
+                                range,
+                                options,
+                                default_engine,
+                                custom_clang_path.as_deref(),
+                            )
+                        })
                         .unwrap_or(Value::Null);
                     let resp = json!({
                         "jsonrpc": "2.0",
@@ -2097,25 +2204,59 @@ fn main() -> io::Result<()> {
                     let mut new_target = None;
                     if let Some(t) = settings.get("target_api").and_then(|v| v.as_str()) {
                         new_target = Some(TargetApi::parse_target(t));
-                    } else if let Some(t) = settings.get("glsl_validator").and_then(|g| g.get("target_api")).and_then(|v| v.as_str()) {
+                    } else if let Some(t) = settings
+                        .get("glsl_validator")
+                        .and_then(|g| g.get("target_api"))
+                        .and_then(|v| v.as_str())
+                    {
                         new_target = Some(TargetApi::parse_target(t));
-                    } else if let Some(t) = settings.get("initialization_options").and_then(|g| g.get("target_api")).and_then(|v| v.as_str()) {
+                    } else if let Some(t) = settings
+                        .get("initialization_options")
+                        .and_then(|g| g.get("target_api"))
+                        .and_then(|v| v.as_str())
+                    {
                         new_target = Some(TargetApi::parse_target(t));
                     }
                     if let Some(nt) = new_target {
                         if nt != default_target {
-                            log(&format!("Updated default_target from {:?} to {:?}", default_target, nt));
+                            log(&format!(
+                                "Updated default_target from {:?} to {:?}",
+                                default_target, nt
+                            ));
                             default_target = nt;
                             revalidate = true;
                         }
                     }
 
-                    if let Some(p) = settings.get("glslang_validator_path").and_then(|v| v.as_str())
+                    if let Some(p) = settings
+                        .get("glslang_validator_path")
+                        .and_then(|v| v.as_str())
                         .or_else(|| settings.get("glslang_path").and_then(|v| v.as_str()))
-                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("glslang_validator_path")).and_then(|v| v.as_str()))
-                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("glslang_path")).and_then(|v| v.as_str()))
-                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("glslang_validator_path")).and_then(|v| v.as_str()))
-                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("glslang_path")).and_then(|v| v.as_str())) {
+                        .or_else(|| {
+                            settings
+                                .get("glsl_validator")
+                                .and_then(|g| g.get("glslang_validator_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            settings
+                                .get("glsl_validator")
+                                .and_then(|g| g.get("glslang_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            settings
+                                .get("initialization_options")
+                                .and_then(|g| g.get("glslang_validator_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            settings
+                                .get("initialization_options")
+                                .and_then(|g| g.get("glslang_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                    {
                         if custom_glslang_path.as_deref() != Some(p) {
                             custom_glslang_path = Some(p.to_string());
                             log(&format!("Updated custom_glslang_path={p}"));
@@ -2123,16 +2264,42 @@ fn main() -> io::Result<()> {
                         }
                     }
 
-                    if let Some(p) = settings.get("clang_format_path").and_then(|v| v.as_str())
-                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("clang_format_path")).and_then(|v| v.as_str()))
-                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("clang_format_path")).and_then(|v| v.as_str())) {
+                    if let Some(p) = settings
+                        .get("clang_format_path")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            settings
+                                .get("glsl_validator")
+                                .and_then(|g| g.get("clang_format_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            settings
+                                .get("initialization_options")
+                                .and_then(|g| g.get("clang_format_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                    {
                         custom_clang_path = Some(p.to_string());
                         log(&format!("Updated custom_clang_path={p}"));
                     }
 
-                    if let Some(v) = settings.get("default_version").and_then(|v| v.as_str())
-                        .or_else(|| settings.get("glsl_validator").and_then(|g| g.get("default_version")).and_then(|v| v.as_str()))
-                        .or_else(|| settings.get("initialization_options").and_then(|g| g.get("default_version")).and_then(|v| v.as_str())) {
+                    if let Some(v) = settings
+                        .get("default_version")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            settings
+                                .get("glsl_validator")
+                                .and_then(|g| g.get("default_version"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            settings
+                                .get("initialization_options")
+                                .and_then(|g| g.get("default_version"))
+                                .and_then(|v| v.as_str())
+                        })
+                    {
                         if custom_default_version.as_deref() != Some(v) {
                             custom_default_version = Some(v.to_string());
                             log(&format!("Updated default_version={v}"));
@@ -2143,10 +2310,18 @@ fn main() -> io::Result<()> {
                     if let Some(f) = settings.get("formatter").and_then(|v| v.as_str()) {
                         default_engine = FormatterEngine::parse_engine(f);
                         log(&format!("Updated default_engine to {:?}", default_engine));
-                    } else if let Some(f) = settings.get("glsl_validator").and_then(|g| g.get("formatter")).and_then(|v| v.as_str()) {
+                    } else if let Some(f) = settings
+                        .get("glsl_validator")
+                        .and_then(|g| g.get("formatter"))
+                        .and_then(|v| v.as_str())
+                    {
                         default_engine = FormatterEngine::parse_engine(f);
                         log(&format!("Updated default_engine to {:?}", default_engine));
-                    } else if let Some(f) = settings.get("initialization_options").and_then(|g| g.get("formatter")).and_then(|v| v.as_str()) {
+                    } else if let Some(f) = settings
+                        .get("initialization_options")
+                        .and_then(|g| g.get("formatter"))
+                        .and_then(|v| v.as_str())
+                    {
                         default_engine = FormatterEngine::parse_engine(f);
                         log(&format!("Updated default_engine to {:?}", default_engine));
                     }
@@ -2266,9 +2441,24 @@ mod tests {
 
     #[test]
     fn test_stage_detection_heuristics() {
-        assert_eq!(get_stage_from_uri("file:///project/shader.glsl", "void main() { gl_Position = vec4(1.0); }"), "vert");
-        assert_eq!(get_stage_from_uri("file:///project/shader.glsl", "void main() { gl_FragCoord.xy; }"), "frag");
-        assert_eq!(get_stage_from_uri("file:///project/shader.glslh", "// header file"), "vert");
+        assert_eq!(
+            get_stage_from_uri(
+                "file:///project/shader.glsl",
+                "void main() { gl_Position = vec4(1.0); }"
+            ),
+            "vert"
+        );
+        assert_eq!(
+            get_stage_from_uri(
+                "file:///project/shader.glsl",
+                "void main() { gl_FragCoord.xy; }"
+            ),
+            "frag"
+        );
+        assert_eq!(
+            get_stage_from_uri("file:///project/shader.glslh", "// header file"),
+            "vert"
+        );
     }
 
     #[test]
@@ -2297,11 +2487,17 @@ mod tests {
             TargetApi::Vulkan
         );
         assert_eq!(
-            detect_target_api("// standard opengl shader\nvoid main() {}", TargetApi::OpenGl),
+            detect_target_api(
+                "// standard opengl shader\nvoid main() {}",
+                TargetApi::OpenGl
+            ),
             TargetApi::OpenGl
         );
         assert_eq!(
-            detect_target_api("// standard vulkan shader\nvoid main() {}", TargetApi::Vulkan),
+            detect_target_api(
+                "// standard vulkan shader\nvoid main() {}",
+                TargetApi::Vulkan
+            ),
             TargetApi::Vulkan
         );
     }
@@ -2331,7 +2527,10 @@ mod tests {
     #[test]
     fn test_percent_decode_str() {
         assert_eq!(percent_decode_str("hello%20world"), "hello world");
-        assert_eq!(percent_decode_str("shader%2Bcommon.glsl"), "shader+common.glsl");
+        assert_eq!(
+            percent_decode_str("shader%2Bcommon.glsl"),
+            "shader+common.glsl"
+        );
         assert_eq!(percent_decode_str("plain_path"), "plain_path");
     }
 
@@ -2352,7 +2551,10 @@ mod tests {
         let ubo_snips = generate_snippet_completions("ubo");
         assert_eq!(ubo_snips.len(), 1);
         assert_eq!(ubo_snips[0]["label"], "ubo");
-        assert!(ubo_snips[0]["insertText"].as_str().unwrap().contains("layout(std140, binding = ${1:0}) uniform ${2:BlockName}"));
+        assert!(ubo_snips[0]["insertText"]
+            .as_str()
+            .unwrap()
+            .contains("layout(std140, binding = ${1:0}) uniform ${2:BlockName}"));
 
         let ssbo_snips = generate_snippet_completions("ssbo");
         assert_eq!(ssbo_snips.len(), 1);
@@ -2360,7 +2562,10 @@ mod tests {
 
         let vert_snips = generate_snippet_completions("vert");
         assert_eq!(vert_snips.len(), 1);
-        assert!(vert_snips[0]["insertText"].as_str().unwrap().contains("#version 460 core"));
+        assert!(vert_snips[0]["insertText"]
+            .as_str()
+            .unwrap()
+            .contains("#version 460 core"));
 
         let all_snips = generate_snippet_completions("");
         assert!(all_snips.len() >= 8);
@@ -2409,24 +2614,45 @@ mod tests {
 
     #[test]
     fn test_clean_glsl_line_syntax() {
-        assert_eq!(clean_glsl_line_syntax("vec4(1.0,0.5,0.2,1.0)"), "vec4(1.0, 0.5, 0.2, 1.0)");
+        assert_eq!(
+            clean_glsl_line_syntax("vec4(1.0,0.5,0.2,1.0)"),
+            "vec4(1.0, 0.5, 0.2, 1.0)"
+        );
         assert_eq!(clean_glsl_line_syntax("void main(){"), "void main() {");
         assert_eq!(clean_glsl_line_syntax("// a,b"), "// a,b");
     }
 
     #[test]
     fn test_formatter_engine_detection() {
-        assert_eq!(FormatterEngine::parse_engine("builtin"), FormatterEngine::Builtin);
-        assert_eq!(FormatterEngine::parse_engine("clang-format"), FormatterEngine::ClangFormat);
-        assert_eq!(FormatterEngine::parse_engine("clang"), FormatterEngine::ClangFormat);
-        assert_eq!(FormatterEngine::parse_engine("unknown"), FormatterEngine::Builtin);
-
         assert_eq!(
-            detect_formatter_engine("// @formatter: clang-format\nvoid main() {}", FormatterEngine::Builtin),
+            FormatterEngine::parse_engine("builtin"),
+            FormatterEngine::Builtin
+        );
+        assert_eq!(
+            FormatterEngine::parse_engine("clang-format"),
             FormatterEngine::ClangFormat
         );
         assert_eq!(
-            detect_formatter_engine("// @formatter: builtin\nvoid main() {}", FormatterEngine::ClangFormat),
+            FormatterEngine::parse_engine("clang"),
+            FormatterEngine::ClangFormat
+        );
+        assert_eq!(
+            FormatterEngine::parse_engine("unknown"),
+            FormatterEngine::Builtin
+        );
+
+        assert_eq!(
+            detect_formatter_engine(
+                "// @formatter: clang-format\nvoid main() {}",
+                FormatterEngine::Builtin
+            ),
+            FormatterEngine::ClangFormat
+        );
+        assert_eq!(
+            detect_formatter_engine(
+                "// @formatter: builtin\nvoid main() {}",
+                FormatterEngine::ClangFormat
+            ),
             FormatterEngine::Builtin
         );
     }
@@ -2480,7 +2706,10 @@ vec3 calculateNormal(mat4 normal, vec3 aNormal) {
 
         // Should find calculateNormal from common.glsl
         let calc_item = items.iter().find(|it| it["label"] == "calculateNormal");
-        assert!(calc_item.is_some(), "calculateNormal must be found in completions");
+        assert!(
+            calc_item.is_some(),
+            "calculateNormal must be found in completions"
+        );
         let item = calc_item.unwrap();
         assert_eq!(item["kind"], 3); // Function
         let doc_str = item["documentation"]["value"].as_str().unwrap();
@@ -2498,7 +2727,10 @@ vec3 calculateNormal(mat4 normal, vec3 aNormal) {
         let norm_res = handle_completion(&norm_req, &doc_cache);
         let norm_items = norm_res.as_array().expect("norm items");
         let norm_item = norm_items.iter().find(|it| it["label"] == "normalize");
-        assert!(norm_item.is_some(), "normalize must be found in completions");
+        assert!(
+            norm_item.is_some(),
+            "normalize must be found in completions"
+        );
         assert_eq!(norm_item.unwrap()["insertText"], "normalize($1)$0");
 
         // Comment test: typing inside comment should return empty list
@@ -2512,7 +2744,10 @@ vec3 calculateNormal(mat4 normal, vec3 aNormal) {
         });
         let comment_res = handle_completion(&comment_req, &doc_cache);
         let comment_items = comment_res.as_array().expect("comment items");
-        assert!(comment_items.is_empty(), "Completions must be empty inside comments");
+        assert!(
+            comment_items.is_empty(),
+            "Completions must be empty inside comments"
+        );
     }
 
     #[test]
@@ -2526,10 +2761,21 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
 }
 "#;
         let cache = HashMap::new();
-        let diags = validate_shader("file:///shader.vert", code, TargetApi::OpenGl, None, &cache, None);
+        let diags = validate_shader(
+            "file:///shader.vert",
+            code,
+            TargetApi::OpenGl,
+            None,
+            &cache,
+            None,
+        );
         // If glslangValidator is installed, it must produce 0 errors.
         let errors: Vec<_> = diags.iter().filter(|d| d["severity"] == 1).collect();
-        assert!(errors.is_empty(), "Should compile modern inverse/transpose without errors: {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "Should compile modern inverse/transpose without errors: {:?}",
+            errors
+        );
     }
 
     #[test]
@@ -2566,7 +2812,10 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
         let res_trans = handle_completion(&req_trans, &doc_cache);
         let items_trans = res_trans.as_array().expect("items");
         let trans_item = items_trans.iter().find(|it| it["label"] == "transpose");
-        assert!(trans_item.is_some(), "transpose must be found in completions");
+        assert!(
+            trans_item.is_some(),
+            "transpose must be found in completions"
+        );
         let item_t = trans_item.unwrap();
         assert_eq!(item_t["insertText"], "transpose($1)$0");
         assert_eq!(item_t["insertTextFormat"], 2);
@@ -2577,7 +2826,10 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
     fn test_version_resolution_from_parent_include() {
         let mut doc_cache = HashMap::new();
         let main_code = "#version 330 core\n#extension GL_ARB_explicit_attrib_location : enable\n#include \"common.glsl\"\n";
-        doc_cache.insert("file:///project/main.vert".to_string(), main_code.to_string());
+        doc_cache.insert(
+            "file:///project/main.vert".to_string(),
+            main_code.to_string(),
+        );
 
         let common_code = "vec3 testFunc(vec3 v) { return inverse(mat3(v.x)) * v; }\n";
         let resolved = resolve_glsl_version_header(
@@ -2590,9 +2842,18 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
 
         assert!(resolved.is_some());
         let header = resolved.unwrap();
-        assert!(header.contains("#version 330 core"), "Must inherit #version 330 core from parent main.vert: {header}");
-        assert!(header.contains("#extension GL_ARB_explicit_attrib_location : enable"), "Must inherit extensions: {header}");
-        assert!(header.ends_with("#line 1\n"), "Must reset line counter with #line 1: {header}");
+        assert!(
+            header.contains("#version 330 core"),
+            "Must inherit #version 330 core from parent main.vert: {header}"
+        );
+        assert!(
+            header.contains("#extension GL_ARB_explicit_attrib_location : enable"),
+            "Must inherit extensions: {header}"
+        );
+        assert!(
+            header.ends_with("#line 1\n"),
+            "Must reset line counter with #line 1: {header}"
+        );
     }
 
     #[test]
@@ -2611,7 +2872,10 @@ vec3 calculateNormal(mat4 model, vec3 aNormal) {
         let res = handle_completion(&req, &doc_cache);
         let items = res.as_array().expect("items");
         let frag_item = items.iter().find(|it| it["label"] == "FragPos");
-        assert!(frag_item.is_some(), "FragPos must be suggested in completion");
+        assert!(
+            frag_item.is_some(),
+            "FragPos must be suggested in completion"
+        );
         let item = frag_item.unwrap();
         assert_eq!(item["kind"], 6); // Variable
         assert_eq!(item["detail"], "out vec3");

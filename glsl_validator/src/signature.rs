@@ -1,51 +1,172 @@
 // glsl_validator - signature.rs
 // Signature Help and Hover provider for GLSL 4.6 (built-ins from docs.gl & user functions across #include)
 
+use crate::docs;
+use crate::{path_to_uri, uri_to_path};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
-use serde_json::{json, Value};
-use crate::docs;
-use crate::{path_to_uri, uri_to_path};
 
 const INVALID_TYPES: &[&str] = &[
-    "return", "else", "case", "default", "discard", "break", "continue", "goto", "layout", "precision",
+    "return",
+    "else",
+    "case",
+    "default",
+    "discard",
+    "break",
+    "continue",
+    "goto",
+    "layout",
+    "precision",
 ];
 const INVALID_NAMES: &[&str] = &[
-    "if", "for", "while", "switch", "return", "layout", "struct", "subroutine",
+    "if",
+    "for",
+    "while",
+    "switch",
+    "return",
+    "layout",
+    "struct",
+    "subroutine",
 ];
-const CONTROL_KEYWORDS: &[&str] = &[
-    "if", "for", "while", "switch", "catch", "return",
-];
+const CONTROL_KEYWORDS: &[&str] = &["if", "for", "while", "switch", "catch", "return"];
 
 pub const STORAGE_QUALIFIERS: &[&str] = &[
-    "in", "out", "inout", "uniform", "buffer", "attribute", "varying", "const", "shared",
-    "flat", "smooth", "noperspective", "centroid", "sample", "patch",
-    "coherent", "readonly", "writeonly", "volatile", "restrict",
-    "highp", "mediump", "lowp",
+    "in",
+    "out",
+    "inout",
+    "uniform",
+    "buffer",
+    "attribute",
+    "varying",
+    "const",
+    "shared",
+    "flat",
+    "smooth",
+    "noperspective",
+    "centroid",
+    "sample",
+    "patch",
+    "coherent",
+    "readonly",
+    "writeonly",
+    "volatile",
+    "restrict",
+    "highp",
+    "mediump",
+    "lowp",
 ];
 
 pub const KNOWN_BASE_TYPES: &[&str] = &[
-    "float", "double", "int", "uint", "bool",
-    "vec2", "vec3", "vec4", "dvec2", "dvec3", "dvec4", "bvec2", "bvec3", "bvec4",
-    "ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4",
-    "mat2", "mat3", "mat4", "mat2x2", "mat2x3", "mat2x4",
-    "mat3x2", "mat3x3", "mat3x4", "mat4x2", "mat4x3", "mat4x4",
-    "dmat2", "dmat3", "dmat4", "dmat2x2", "dmat2x3", "dmat2x4",
-    "dmat3x2", "dmat3x3", "dmat3x4", "dmat4x2", "dmat4x3", "dmat4x4",
-    "sampler1D", "sampler2D", "sampler3D", "samplerCube", "sampler2DShadow", "samplerCubeShadow",
-    "sampler2DArray", "sampler2DArrayShadow", "sampler1DArray", "sampler1DArrayShadow",
-    "samplerCubeArray", "samplerCubeArrayShadow", "sampler2DMS", "sampler2DMSArray", "samplerBuffer",
-    "isampler1D", "isampler2D", "isampler3D", "isamplerCube", "isampler2DArray", "isampler1DArray",
-    "isamplerCubeArray", "isampler2DMS", "isampler2DMSArray", "isamplerBuffer",
-    "usampler1D", "usampler2D", "usampler3D", "usamplerCube", "usampler2DArray", "usampler1DArray",
-    "usamplerCubeArray", "usampler2DMS", "usampler2DMSArray", "usamplerBuffer",
-    "image1D", "image2D", "image3D", "imageCube", "image2DArray", "imageCubeArray",
-    "image2DMS", "image2DMSArray", "imageBuffer", "iimage1D", "iimage2D", "iimage3D",
-    "iimageCube", "iimage2DArray", "iimageCubeArray", "iimage2DMS", "iimage2DMSArray", "iimageBuffer",
-    "uimage1D", "uimage2D", "uimage3D", "uimageCube", "uimage2DArray", "uimageCubeArray",
-    "uimage2DMS", "uimage2DMSArray", "uimageBuffer", "atomic_uint",
+    "float",
+    "double",
+    "int",
+    "uint",
+    "bool",
+    "vec2",
+    "vec3",
+    "vec4",
+    "dvec2",
+    "dvec3",
+    "dvec4",
+    "bvec2",
+    "bvec3",
+    "bvec4",
+    "ivec2",
+    "ivec3",
+    "ivec4",
+    "uvec2",
+    "uvec3",
+    "uvec4",
+    "mat2",
+    "mat3",
+    "mat4",
+    "mat2x2",
+    "mat2x3",
+    "mat2x4",
+    "mat3x2",
+    "mat3x3",
+    "mat3x4",
+    "mat4x2",
+    "mat4x3",
+    "mat4x4",
+    "dmat2",
+    "dmat3",
+    "dmat4",
+    "dmat2x2",
+    "dmat2x3",
+    "dmat2x4",
+    "dmat3x2",
+    "dmat3x3",
+    "dmat3x4",
+    "dmat4x2",
+    "dmat4x3",
+    "dmat4x4",
+    "sampler1D",
+    "sampler2D",
+    "sampler3D",
+    "samplerCube",
+    "sampler2DShadow",
+    "samplerCubeShadow",
+    "sampler2DArray",
+    "sampler2DArrayShadow",
+    "sampler1DArray",
+    "sampler1DArrayShadow",
+    "samplerCubeArray",
+    "samplerCubeArrayShadow",
+    "sampler2DMS",
+    "sampler2DMSArray",
+    "samplerBuffer",
+    "isampler1D",
+    "isampler2D",
+    "isampler3D",
+    "isamplerCube",
+    "isampler2DArray",
+    "isampler1DArray",
+    "isamplerCubeArray",
+    "isampler2DMS",
+    "isampler2DMSArray",
+    "isamplerBuffer",
+    "usampler1D",
+    "usampler2D",
+    "usampler3D",
+    "usamplerCube",
+    "usampler2DArray",
+    "usampler1DArray",
+    "usamplerCubeArray",
+    "usampler2DMS",
+    "usampler2DMSArray",
+    "usamplerBuffer",
+    "image1D",
+    "image2D",
+    "image3D",
+    "imageCube",
+    "image2DArray",
+    "imageCubeArray",
+    "image2DMS",
+    "image2DMSArray",
+    "imageBuffer",
+    "iimage1D",
+    "iimage2D",
+    "iimage3D",
+    "iimageCube",
+    "iimage2DArray",
+    "iimageCubeArray",
+    "iimage2DMS",
+    "iimage2DMSArray",
+    "iimageBuffer",
+    "uimage1D",
+    "uimage2D",
+    "uimage3D",
+    "uimageCube",
+    "uimage2DArray",
+    "uimageCubeArray",
+    "uimage2DMS",
+    "uimage2DMSArray",
+    "uimageBuffer",
+    "atomic_uint",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -410,7 +531,10 @@ pub fn scan_user_functions(
                         && (fn_name.starts_with(|c: char| c.is_alphabetic() || c == '_'))
                         && fn_name.chars().all(|c| c.is_alphanumeric() || c == '_');
 
-                    if is_valid_name && !INVALID_NAMES.contains(&fn_name) && !INVALID_TYPES.contains(&return_type) {
+                    if is_valid_name
+                        && !INVALID_NAMES.contains(&fn_name)
+                        && !INVALID_TYPES.contains(&return_type)
+                    {
                         let col_idx = raw_line.find(fn_name).unwrap_or(0);
                         if let Some(close_idx) = line.find(')') {
                             if let Some(sig) = parse_function_header(
@@ -450,15 +574,13 @@ pub fn scan_user_functions(
 }
 
 pub fn is_valid_identifier(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
     let mut chars = s.chars();
-    let first = chars.next().unwrap();
-    if !first.is_alphabetic() && first != '_' {
-        return false;
+    match chars.next() {
+        Some(first) if first.is_alphabetic() || first == '_' => {
+            chars.all(|c| c.is_alphanumeric() || c == '_')
+        }
+        _ => false,
     }
-    chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// Parses user variable, constant, macro, and struct declarations from GLSL source text.
@@ -498,7 +620,11 @@ pub fn scan_user_variables(
                 let macro_name = macro_name_raw.split('(').next().unwrap_or(macro_name_raw);
                 if is_valid_identifier(macro_name) {
                     let col = raw_line.find(macro_name).unwrap_or(0);
-                    let doc_text = if pending_doc.is_empty() { None } else { Some(pending_doc.join(" ")) };
+                    let doc_text = if pending_doc.is_empty() {
+                        None
+                    } else {
+                        Some(pending_doc.join(" "))
+                    };
                     results.push(VariableSymbol {
                         name: macro_name.to_string(),
                         var_type: "macro".to_string(),
@@ -519,13 +645,21 @@ pub fn scan_user_variables(
         if let Some(struct_idx) = line.find("struct") {
             let before = &line[..struct_idx];
             let after = line[struct_idx + 6..].trim_start();
-            let before_ok = before.is_empty() || before.chars().last().is_none_or(|c| c.is_whitespace());
+            let before_ok =
+                before.is_empty() || before.chars().last().is_none_or(|c| c.is_whitespace());
             if before_ok {
-                let name_candidate = after.split(|c: char| c.is_whitespace() || c == '{').next().unwrap_or("");
+                let name_candidate = after
+                    .split(|c: char| c.is_whitespace() || c == '{')
+                    .next()
+                    .unwrap_or("");
                 if is_valid_identifier(name_candidate) && !INVALID_NAMES.contains(&name_candidate) {
                     custom_types.insert(name_candidate.to_string());
                     let col = raw_line.find(name_candidate).unwrap_or(0);
-                    let doc_text = if pending_doc.is_empty() { None } else { Some(pending_doc.join(" ")) };
+                    let doc_text = if pending_doc.is_empty() {
+                        None
+                    } else {
+                        Some(pending_doc.join(" "))
+                    };
                     results.push(VariableSymbol {
                         name: name_candidate.to_string(),
                         var_type: "struct".to_string(),
@@ -544,8 +678,11 @@ pub fn scan_user_variables(
         let mut open_b = 0;
         let mut close_b = 0;
         for b in line.bytes() {
-            if b == b'{' { open_b += 1; }
-            else if b == b'}' { close_b += 1; }
+            if b == b'{' {
+                open_b += 1;
+            } else if b == b'}' {
+                close_b += 1;
+            }
         }
 
         // Strip layout(...) if present
@@ -564,7 +701,7 @@ pub fn scan_user_variables(
         // Check for variable declaration ending with ';' or '='
         if !clean.starts_with('#') && (clean.contains(';') || clean.contains('=')) {
             let stmt = clean.split([';', '=']).next().unwrap_or("").trim();
-            
+
             let is_fn = if let Some(p) = stmt.find('(') {
                 p > 0
             } else {
@@ -602,11 +739,7 @@ struct VarParseContext<'a> {
     custom_types: &'a HashSet<String>,
 }
 
-fn parse_variable_statement(
-    stmt: &str,
-    ctx: &VarParseContext,
-    results: &mut Vec<VariableSymbol>,
-) {
+fn parse_variable_statement(stmt: &str, ctx: &VarParseContext, results: &mut Vec<VariableSymbol>) {
     let tokens: Vec<&str> = stmt.split_whitespace().collect();
     if tokens.is_empty() {
         return;
@@ -653,7 +786,11 @@ fn parse_variable_statement(
 
     let idents_slice = &tokens[idents_start_idx..];
     let remaining = idents_slice.join(" ");
-    let doc_text = if ctx.pending_doc.is_empty() { None } else { Some(ctx.pending_doc.join(" ")) };
+    let doc_text = if ctx.pending_doc.is_empty() {
+        None
+    } else {
+        Some(ctx.pending_doc.join(" "))
+    };
 
     for part in remaining.split(',') {
         let part_trimmed = part.trim();
@@ -661,7 +798,10 @@ fn parse_variable_statement(
             .split(|c: char| c == '[' || c == ';' || c == '=' || c.is_whitespace())
             .next()
             .unwrap_or("");
-        if is_valid_identifier(var_name) && !INVALID_NAMES.contains(&var_name) && !INVALID_TYPES.contains(&var_name) {
+        if is_valid_identifier(var_name)
+            && !INVALID_NAMES.contains(&var_name)
+            && !INVALID_TYPES.contains(&var_name)
+        {
             let col = ctx.raw_line.find(var_name).unwrap_or(0);
             results.push(VariableSymbol {
                 name: var_name.to_string(),
@@ -730,9 +870,7 @@ fn scan_included_file(
         return;
     }
 
-    let mtime = std::fs::metadata(candidate)
-        .and_then(|m| m.modified())
-        .ok();
+    let mtime = std::fs::metadata(candidate).and_then(|m| m.modified()).ok();
 
     if let Some(mt) = mtime {
         let cached = {
@@ -768,11 +906,14 @@ fn scan_included_file(
                 if cache.len() > 64 {
                     cache.clear();
                 }
-                cache.insert(candidate.to_path_buf(), CacheEntry {
-                    mtime: mt,
-                    functions: funcs.clone(),
-                    variables: vars.clone(),
-                });
+                cache.insert(
+                    candidate.to_path_buf(),
+                    CacheEntry {
+                        mtime: mt,
+                        functions: funcs.clone(),
+                        variables: vars.clone(),
+                    },
+                );
             }
             if let Some(ref mut funcs_out) = ctx.all_functions {
                 funcs_out.extend(funcs);
@@ -788,12 +929,7 @@ fn scan_included_file(
     }
 }
 
-fn scan_includes_in_text(
-    text: &str,
-    base_dir: &Path,
-    ctx: &mut IncludeScanContext,
-    depth: usize,
-) {
+fn scan_includes_in_text(text: &str, base_dir: &Path, ctx: &mut IncludeScanContext, depth: usize) {
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("#include") {
@@ -812,12 +948,7 @@ fn scan_includes_in_text(
                 .and_then(|n| n.to_str())
                 .unwrap_or(include_target);
 
-            scan_included_file(
-                &candidate,
-                source_label,
-                ctx,
-                depth,
-            );
+            scan_included_file(&candidate, source_label, ctx, depth);
         }
     }
 }
@@ -927,7 +1058,8 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
 
     // 2. Check user-defined functions (current doc + #includes)
     let user_funcs = resolve_includes_and_scan(uri, doc, doc_cache);
-    let matched_funcs: Vec<&FunctionSignature> = user_funcs.iter().filter(|f| f.name == fn_name).collect();
+    let matched_funcs: Vec<&FunctionSignature> =
+        user_funcs.iter().filter(|f| f.name == fn_name).collect();
 
     if !matched_funcs.is_empty() {
         let mut signatures = Vec::with_capacity(matched_funcs.len());
@@ -1001,7 +1133,10 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         if line.is_char_boundary(max_col) {
             max_col
         } else {
-            (0..=max_col).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0)
+            (0..=max_col)
+                .rev()
+                .find(|&i| line.is_char_boundary(i))
+                .unwrap_or(0)
         }
     };
 
@@ -1062,9 +1197,7 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
 
         let markdown = format!(
             "```glsl\n{}\n```\n\n{}{}",
-            func.label,
-            source_info,
-            doc_text
+            func.label, source_info, doc_text
         );
 
         return json!({
@@ -1086,11 +1219,7 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
 
         let markdown = format!(
             "```glsl\n{} {} {}\n```\n\n{}{}",
-            var.qualifier,
-            var.var_type,
-            var.name,
-            source_info,
-            doc_text
+            var.qualifier, var.var_type, var.name, source_info, doc_text
         );
 
         return json!({
@@ -1306,9 +1435,13 @@ vec3 getFragPos(mat4 model, vec3 aPos) {
 #include "common.glsl"
 void main() {}
 "#;
-        let funcs = resolve_includes_and_scan("file:///project/shaders/main.frag", main_code, &doc_cache);
+        let funcs =
+            resolve_includes_and_scan("file:///project/shaders/main.frag", main_code, &doc_cache);
         assert_eq!(funcs.len(), 2);
-        let common_fn = funcs.iter().find(|f| f.name == "getFragPos").expect("getFragPos found");
+        let common_fn = funcs
+            .iter()
+            .find(|f| f.name == "getFragPos")
+            .expect("getFragPos found");
         assert_eq!(common_fn.source, Some("common.glsl".to_string()));
     }
 
@@ -1388,15 +1521,34 @@ void main() {
 }
 "#;
         let vars = scan_user_variables(code, None, Some("file:///shader.frag"));
-        assert!(vars.iter().any(|v| v.name == "aPos" && v.var_type == "vec3" && v.qualifier == "in"));
-        assert!(vars.iter().any(|v| v.name == "FragPos" && v.var_type == "vec3" && v.qualifier == "out" && v.doc.as_ref().unwrap().contains("Fragment position")));
-        assert!(vars.iter().any(|v| v.name == "model" && v.var_type == "mat4" && v.qualifier == "uniform"));
-        assert!(vars.iter().any(|v| v.name == "view" && v.var_type == "mat4" && v.qualifier == "uniform"));
-        assert!(vars.iter().any(|v| v.name == "projection" && v.var_type == "mat4" && v.qualifier == "uniform"));
-        assert!(vars.iter().any(|v| v.name == "PI" && v.var_type == "float" && v.qualifier == "const"));
-        assert!(vars.iter().any(|v| v.name == "NR_LIGHTS" && v.qualifier == "#define"));
-        assert!(vars.iter().any(|v| v.name == "Material" && v.qualifier == "struct"));
-        assert!(vars.iter().any(|v| v.name == "norm" && v.var_type == "vec3"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "aPos" && v.var_type == "vec3" && v.qualifier == "in"));
+        assert!(vars.iter().any(|v| v.name == "FragPos"
+            && v.var_type == "vec3"
+            && v.qualifier == "out"
+            && v.doc.as_ref().unwrap().contains("Fragment position")));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "model" && v.var_type == "mat4" && v.qualifier == "uniform"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "view" && v.var_type == "mat4" && v.qualifier == "uniform"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "projection" && v.var_type == "mat4" && v.qualifier == "uniform"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "PI" && v.var_type == "float" && v.qualifier == "const"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "NR_LIGHTS" && v.qualifier == "#define"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "Material" && v.qualifier == "struct"));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == "norm" && v.var_type == "vec3"));
     }
 
     #[test]
@@ -1414,7 +1566,10 @@ void main() {
             }
         });
         let hover_res = handle_hover(&hover_req, &doc_cache);
-        assert!(hover_res["contents"]["value"].as_str().unwrap().contains("out vec3 FragPos"));
+        assert!(hover_res["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("out vec3 FragPos"));
 
         // Definition test
         let def_req = json!({

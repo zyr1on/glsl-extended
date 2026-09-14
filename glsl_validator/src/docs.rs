@@ -853,4 +853,3 @@ pub fn lookup_builtin_function(name: &str) -> Option<&'static BuiltinFunction> {
 pub fn get_all_builtins() -> &'static [BuiltinFunction] {
     BUILTIN_FUNCTIONS
 }
-
