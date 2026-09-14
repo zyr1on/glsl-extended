@@ -789,6 +789,14 @@ pub fn generate_swizzle_completions(dim: usize) -> Vec<Value> {
     items
 }
 
+#[inline]
+pub fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    if prefix.len() > s.len() {
+        return false;
+    }
+    s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
 pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
     let snippets = [
         (
@@ -847,10 +855,9 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
         ),
     ];
 
-    let query_lower = query.to_lowercase();
     snippets
         .iter()
-        .filter(|(prefix, _, _, _)| query_lower.is_empty() || prefix.starts_with(&query_lower))
+        .filter(|(prefix, _, _, _)| query.is_empty() || starts_with_ignore_ascii_case(prefix, query))
         .map(|(prefix, detail, body, doc)| {
             json!({
                 "label": prefix,
@@ -885,8 +892,15 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         None => return json!([]),
     };
 
-    let col = col_idx.min(line.len());
-    let prefix = &line[..col];
+    let safe_col = {
+        let max_col = col_idx.min(line.len());
+        if line.is_char_boundary(max_col) {
+            max_col
+        } else {
+            (0..=max_col).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0)
+        }
+    };
+    let prefix = &line[..safe_col];
 
     let trimmed = prefix.trim_end();
     if let Some(stripped) = trimmed.strip_suffix('.') {
@@ -932,9 +946,8 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
 
     // 2. User functions from current file and recursively included files (#include)
     let user_funcs = signature::resolve_includes_and_scan(uri, doc, doc_cache);
-    let word_lower = word.to_lowercase();
     for func in user_funcs {
-        if word.is_empty() || func.name.to_lowercase().starts_with(&word_lower) {
+        if word.is_empty() || starts_with_ignore_ascii_case(&func.name, word) {
             let detail = func.label.clone();
             let doc_text = match (&func.source, &func.doc) {
                 (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
@@ -964,7 +977,7 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
 
     // 3. Built-in functions from docs.gl
     for builtin in docs::get_all_builtins() {
-        if word.is_empty() || builtin.name.to_lowercase().starts_with(&word_lower) {
+        if word.is_empty() || starts_with_ignore_ascii_case(builtin.name, word) {
             if items.iter().any(|it| it["label"] == builtin.name) {
                 continue;
             }
@@ -1398,31 +1411,36 @@ pub fn find_colors_in_text(text: &str) -> Vec<ColorItem> {
             if let Some(close_idx) = line[args_start..].find(')') {
                 let end_char_idx = args_start + close_idx + 1;
                 let args_str = &line[args_start..args_start + close_idx];
-                let tokens: Vec<&str> = args_str.split(',').collect();
-
-                if is_v4 && tokens.len() == 4 {
-                    if let (Some(r), Some(g), Some(b), Some(a)) = (
-                        parse_color_token(tokens[0]),
-                        parse_color_token(tokens[1]),
-                        parse_color_token(tokens[2]),
-                        parse_color_token(tokens[3]),
-                    ) {
-                        results.push(ColorItem {
-                            line: line_idx,
-                            start_col: start_char_idx,
-                            end_col: end_char_idx,
-                            r: r.clamp(0.0, 1.0),
-                            g: g.clamp(0.0, 1.0),
-                            b: b.clamp(0.0, 1.0),
-                            a: a.clamp(0.0, 1.0),
-                            is_vec4: true,
-                        });
+                let mut parts = args_str.split(',');
+                if is_v4 {
+                    if let (Some(t0), Some(t1), Some(t2), Some(t3), None) =
+                        (parts.next(), parts.next(), parts.next(), parts.next(), parts.next())
+                    {
+                        if let (Some(r), Some(g), Some(b), Some(a)) = (
+                            parse_color_token(t0),
+                            parse_color_token(t1),
+                            parse_color_token(t2),
+                            parse_color_token(t3),
+                        ) {
+                            results.push(ColorItem {
+                                line: line_idx,
+                                start_col: start_char_idx,
+                                end_col: end_char_idx,
+                                r: r.clamp(0.0, 1.0),
+                                g: g.clamp(0.0, 1.0),
+                                b: b.clamp(0.0, 1.0),
+                                a: a.clamp(0.0, 1.0),
+                                is_vec4: true,
+                            });
+                        }
                     }
-                } else if !is_v4 && tokens.len() == 3 {
+                } else if let (Some(t0), Some(t1), Some(t2), None) =
+                    (parts.next(), parts.next(), parts.next(), parts.next())
+                {
                     if let (Some(r), Some(g), Some(b)) = (
-                        parse_color_token(tokens[0]),
-                        parse_color_token(tokens[1]),
-                        parse_color_token(tokens[2]),
+                        parse_color_token(t0),
+                        parse_color_token(t1),
+                        parse_color_token(t2),
                     ) {
                         results.push(ColorItem {
                             line: line_idx,

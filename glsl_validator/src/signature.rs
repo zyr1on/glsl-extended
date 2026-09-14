@@ -110,6 +110,9 @@ pub fn find_enclosing_call(text: &str, line_idx: usize, col_idx: usize) -> Optio
     }
 
     let open_idx = open_paren_idx?;
+    if offset <= open_idx {
+        return None;
+    }
 
     // Extract function identifier before '('
     let before_paren = &text[..open_idx];
@@ -177,13 +180,9 @@ fn parse_function_header(
     }
 
     let before = header[..open_paren].trim();
-    let tokens: Vec<&str> = before.split_whitespace().collect();
-    if tokens.len() < 2 {
-        return None;
-    }
-
-    let fn_name = tokens.last()?.to_string();
-    let return_type = tokens[tokens.len() - 2].to_string();
+    let mut it = before.split_whitespace().rev();
+    let fn_name = it.next()?.to_string();
+    let return_type = it.next()?.to_string();
 
     let params_str = header[open_paren + 1..close_paren].trim();
     let parameters: Vec<String> = if params_str.is_empty() || params_str == "void" {
@@ -268,17 +267,13 @@ pub fn scan_user_functions(text: &str, source_name: Option<&str>) -> Vec<Functio
         if brace_level == 0 && !line.starts_with("return") && !line.starts_with('#') {
             if let Some(open_paren) = line.find('(') {
                 let before = line[..open_paren].trim();
-                let tokens: Vec<&str> = before.split_whitespace().collect();
-
-                if tokens.len() >= 2 {
-                    let fn_name = tokens.last().unwrap();
-                    let return_type = tokens[tokens.len() - 2];
-
+                let mut it = before.split_whitespace().rev();
+                if let (Some(fn_name), Some(return_type)) = (it.next(), it.next()) {
                     let is_valid_name = !fn_name.is_empty()
                         && (fn_name.starts_with(|c: char| c.is_alphabetic() || c == '_'))
                         && fn_name.chars().all(|c| c.is_alphanumeric() || c == '_');
 
-                    if is_valid_name && !INVALID_NAMES.contains(fn_name) && !INVALID_TYPES.contains(&return_type) {
+                    if is_valid_name && !INVALID_NAMES.contains(&fn_name) && !INVALID_TYPES.contains(&return_type) {
                         if let Some(close_idx) = line.find(')') {
                             if let Some(sig) = parse_function_header(&line[..=close_idx], &pending_doc, source_name) {
                                 results.push(sig);
@@ -571,13 +566,18 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         None => return json!(null),
     };
 
-    if col_idx > line.len() {
-        return json!(null);
-    }
+    let safe_col = {
+        let max_col = col_idx.min(line.len());
+        if line.is_char_boundary(max_col) {
+            max_col
+        } else {
+            (0..=max_col).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0)
+        }
+    };
 
     // Extract word under cursor
-    let mut word_start = col_idx;
-    for (i, c) in line[..col_idx].char_indices().rev() {
+    let mut word_start = safe_col;
+    for (i, c) in line[..safe_col].char_indices().rev() {
         if c.is_alphanumeric() || c == '_' {
             word_start = i;
         } else {
@@ -585,10 +585,10 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         }
     }
 
-    let mut word_end = col_idx;
-    for (i, c) in line[col_idx..].char_indices() {
+    let mut word_end = safe_col;
+    for (i, c) in line[safe_col..].char_indices() {
         if c.is_alphanumeric() || c == '_' {
-            word_end = col_idx + i + c.len_utf8();
+            word_end = safe_col + i + c.len_utf8();
         } else {
             break;
         }

@@ -27,16 +27,17 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
   - **LSP 1 (`glsl_analyzer`):** Fast autocompletion, inline hover documentation, and goto-definition.
   - **LSP 2 (`glsl_validator`):** Compiler diagnostics, formatting, color preview, and signature help.
 
-- **Signature Help & docs.gl Documentation (`textDocument/signatureHelp` & `textDocument/hover`):**
+- **Signature Help, Hover & Autocompletion (`signatureHelp`, `hover`, `completion`):**
   - Real-time parameter hints with active parameter highlighting for functions while typing.
-  - Built-in OpenGL 4.6 documentation (`texture`, `normalize`, `mix`, `clamp`, `dot`, `cross`, etc.) with docs.gl summaries.
-  - Automatically resolves user-defined functions and signatures across `#include` files.
+  - Built-in OpenGL documentation (`texture`, `normalize`, `mix`, `clamp`, `dot`, `cross`, etc.) with docs.gl summaries.
+  - Automatically resolves user-defined functions and signatures across recursive `#include` files.
+  - Sub-microsecond response using editor buffer caching (zero disk I/O) and mtime filesystem caching.
 
-- **Dual Target API Validation (OpenGL 4.6 & Vulkan):**
-  - **OpenGL 4.6 (Default):** Validates pure Desktop OpenGL without mandatory SPIR-V layout restrictions (`out vec3 Normal;` compiles cleanly).
+- **Dual Target API Validation (OpenGL & Vulkan):**
+  - **OpenGL (Default):** Validates pure Desktop OpenGL without mandatory SPIR-V layout restrictions across all versions (from `#version 330 core` through `#version 460 core`).
   - **Vulkan (SPIR-V):** Strictly enforces SPIR-V layout locations (`layout(location = 0)`), descriptor sets, and push constants.
   - **Zero-Restart Switching:** Toggle dynamically via `settings.json` or per-file `// @target: vulkan` directives.
-  - Source attribution in diagnostics: `glslangValidator (OpenGL 4.6)` vs `glslangValidator (Vulkan)`.
+  - **Dynamic Diagnostics Source:** Matches actual shader version, e.g. `glslangValidator (OpenGL 330 core)`, `glslangValidator (OpenGL 460 core)`, or `glslangValidator (Vulkan)`.
 
 - **Smart GLSL Vector Swizzling & Chained Member Autocompletion:**
   - Automatic swizzle completion on vectors (`.xyzw`, `.rgba`, `.stpq`) and `.length()`.
