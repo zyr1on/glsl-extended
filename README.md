@@ -56,7 +56,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 ---
 
-## Configuration (`settings.json`)
+## Extra Configuration (`settings.json`)
 
 To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux, `Cmd+,` on macOS):
 
@@ -78,14 +78,14 @@ To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux
       "initialization_options": {
         "target_api": "opengl",
         "formatter": "clang-format",
-        "glslang_validator_path": "",
-        "glsl_validator_path": "",
-        "clang_format_path": ""
+        "glslang_validator_path": "",    // custom path for glslang 
+        "glsl_validator_path": "",       // custom path for glsl_validator
+        "clang_format_path": ""          // custom path for clang_format
       }
     },
     "glsl_analyzer": {
       "initialization_options": {
-        "glsl_analyzer_path": ""
+        "glsl_analyzer_path": ""        // custom path for glsl_analyzer
       }
     }
   }
