@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.6] — 2026-09-14
+
+### Added
+- **Signature Help (`textDocument/signatureHelp`):**
+  - Real-time parameter hints with active parameter highlighting when entering parentheses or commas.
+  - Automatically scans user functions across `#include` files (e.g. `common.glsl`).
+  - Comprehensive OpenGL 4.6 built-in function database with docs.gl summaries (`texture`, `normalize`, `mix`, `clamp`, `dot`, `cross`, etc.).
+- **docs.gl Hover Documentation (`textDocument/hover`):**
+  - Integrated Markdown hover documentation for GLSL 4.6 core profile built-in functions.
+
+### Fixed
+- **Tree-sitter Indentation Alignment:**
+  - Fixed closing brace auto-indentation issue by properly scoping `@end` token ranges in `indents.scm`.
+
+### Changed
+- **Optimized Release Pipeline:**
+  - Streamlined `.github/workflows/release.yml` to package and publish only native `glsl_validator` binaries.
+
+---
+
 ## [0.1.5] — 2026-09-14
 
 ### Added

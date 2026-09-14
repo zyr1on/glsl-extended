@@ -25,7 +25,12 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 - **Dual Language Server Architecture:**
   - **LSP 1 (`glsl_analyzer`):** Fast autocompletion, inline hover documentation, and goto-definition.
-  - **LSP 2 (`glsl_validator`):** Asynchronous compiler diagnostics and linting powered by `glslangValidator`.
+  - **LSP 2 (`glsl_validator`):** Compiler diagnostics, formatting, color preview, and signature help.
+
+- **Signature Help & docs.gl Documentation (`textDocument/signatureHelp` & `textDocument/hover`):**
+  - Real-time parameter hints with active parameter highlighting for functions while typing.
+  - Built-in OpenGL 4.6 documentation (`texture`, `normalize`, `mix`, `clamp`, `dot`, `cross`, etc.) with docs.gl summaries.
+  - Automatically resolves user-defined functions and signatures across `#include` files.
 
 - **Dual Target API Validation (OpenGL 4.6 & Vulkan):**
   - **OpenGL 4.6 (Default):** Validates pure Desktop OpenGL without mandatory SPIR-V layout restrictions (`out vec3 Normal;` compiles cleanly).
