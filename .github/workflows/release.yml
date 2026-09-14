@@ -10,6 +10,7 @@ permissions:
   contents: write
 
 jobs:
+  build:
     name: Build glsl_validator (${{ matrix.target }})
     strategy:
       matrix:
