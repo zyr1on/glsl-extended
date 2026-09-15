@@ -1092,48 +1092,22 @@ pub fn resolve_includes_and_scan_symbols(
     (all_functions, all_variables)
 }
 
-/// Resolves #include directives and aggregates function signatures with mtime caching.
+/// Resolves #include directives and aggregates function signatures.
 pub fn resolve_includes_and_scan(
     uri: &str,
     text: &str,
     doc_cache: &HashMap<String, String>,
 ) -> Vec<FunctionSignature> {
-    let mut all_functions = scan_user_functions(text, None, Some(uri));
-    let mut visited: HashSet<PathBuf> = HashSet::new();
-
-    if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
-        let mut ctx = IncludeScanContext {
-            doc_cache,
-            all_functions: Some(&mut all_functions),
-            all_variables: None,
-            visited: &mut visited,
-        };
-        scan_includes_in_text(text, &base_dir, &mut ctx, 1);
-    }
-
-    all_functions
+    resolve_includes_and_scan_symbols(uri, text, doc_cache).0
 }
 
-/// Resolves #include directives and aggregates variable and symbol declarations with mtime caching.
+/// Resolves #include directives and aggregates variable and symbol declarations.
 pub fn resolve_includes_and_scan_variables(
     uri: &str,
     text: &str,
     doc_cache: &HashMap<String, String>,
 ) -> Vec<VariableSymbol> {
-    let mut all_variables = scan_user_variables(text, None, Some(uri));
-    let mut visited: HashSet<PathBuf> = HashSet::new();
-
-    if let Some(base_dir) = uri_to_path(uri).and_then(|p| p.parent().map(|dir| dir.to_path_buf())) {
-        let mut ctx = IncludeScanContext {
-            doc_cache,
-            all_functions: None,
-            all_variables: Some(&mut all_variables),
-            visited: &mut visited,
-        };
-        scan_includes_in_text(text, &base_dir, &mut ctx, 1);
-    }
-
-    all_variables
+    resolve_includes_and_scan_symbols(uri, text, doc_cache).1
 }
 
 /// Handles textDocument/signatureHelp requests.
@@ -1284,6 +1258,15 @@ pub fn handle_signature_help(msg: &Value, doc_cache: &HashMap<String, String>) -
     json!(null)
 }
 
+pub fn format_symbol_doc(source: Option<&str>, doc: Option<&str>) -> String {
+    match (source, doc) {
+        (Some(src), Some(d)) if !d.trim().is_empty() => format!("*Defined in `{src}`*\n\n{}", d.trim()),
+        (Some(src), _) => format!("*Defined in `{src}`*"),
+        (None, Some(d)) => d.trim().to_string(),
+        (None, None) => String::new(),
+    }
+}
+
 /// Handles textDocument/hover requests for built-ins and user-defined functions.
 pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
     let params = match msg.get("params") {
@@ -1367,46 +1350,26 @@ pub fn handle_hover(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
         });
     }
 
-    // 2. User-defined functions
-    let user_funcs = resolve_includes_and_scan(uri, doc, doc_cache);
+    // 2. User-defined functions & variables in a single pass
+    let (user_funcs, user_vars) = resolve_includes_and_scan_symbols(uri, doc, doc_cache);
     if let Some(func) = user_funcs.iter().find(|f| f.name == word) {
-        let doc_text = func.doc.as_deref().unwrap_or("");
-        let source_info = match &func.source {
-            Some(src) => format!("*Defined in `{src}`*\n\n"),
-            None => String::new(),
-        };
-
-        let markdown = format!(
-            "```glsl\n{}\n```\n\n{}{}",
-            func.label, source_info, doc_text
-        );
-
+        let doc_text = format_symbol_doc(func.source.as_deref(), func.doc.as_deref());
+        let doc_part = if doc_text.is_empty() { String::new() } else { format!("\n\n{doc_text}") };
         return json!({
             "contents": {
                 "kind": "markdown",
-                "value": markdown
+                "value": format!("```glsl\n{}\n```{doc_part}", func.label)
             }
         });
     }
 
-    // 3. User-defined variables / symbols
-    let user_vars = resolve_includes_and_scan_variables(uri, doc, doc_cache);
     if let Some(var) = user_vars.iter().find(|v| v.name == word) {
-        let doc_text = var.doc.as_deref().unwrap_or("");
-        let source_info = match &var.source {
-            Some(src) => format!("*Defined in `{src}`*\n\n"),
-            None => String::new(),
-        };
-
-        let markdown = format!(
-            "```glsl\n{} {} {}\n```\n\n{}{}",
-            var.qualifier, var.var_type, var.name, source_info, doc_text
-        );
-
+        let doc_text = format_symbol_doc(var.source.as_deref(), var.doc.as_deref());
+        let doc_part = if doc_text.is_empty() { String::new() } else { format!("\n\n{doc_text}") };
         return json!({
             "contents": {
                 "kind": "markdown",
-                "value": markdown.trim_end()
+                "value": format!("```glsl\n{} {} {}\n```{doc_part}", var.qualifier, var.var_type, var.name).trim_end().to_string()
             }
         });
     }
@@ -1463,30 +1426,19 @@ pub fn handle_definition(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     }
     let word = &line[word_start..word_end];
 
-    let user_funcs = resolve_includes_and_scan(uri, doc, doc_cache);
-    if let Some(func) = user_funcs.iter().find(|f| f.name == word) {
-        if let Some(target_uri) = &func.file_uri {
-            return json!({
-                "uri": target_uri,
-                "range": {
-                    "start": { "line": func.line, "character": func.col },
-                    "end": { "line": func.line, "character": func.col + func.name.len() }
-                }
-            });
-        }
-    }
+    let (user_funcs, user_vars) = resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+    let target = user_funcs.iter().find(|f| f.name == word)
+        .map(|f| (f.line, f.col, f.name.len(), &f.file_uri))
+        .or_else(|| user_vars.iter().find(|v| v.name == word).map(|v| (v.line, v.col, v.name.len(), &v.file_uri)));
 
-    let user_vars = resolve_includes_and_scan_variables(uri, doc, doc_cache);
-    if let Some(var) = user_vars.iter().find(|v| v.name == word) {
-        if let Some(target_uri) = &var.file_uri {
-            return json!({
-                "uri": target_uri,
-                "range": {
-                    "start": { "line": var.line, "character": var.col },
-                    "end": { "line": var.line, "character": var.col + var.name.len() }
-                }
-            });
-        }
+    if let Some((line, col, len, Some(target_uri))) = target {
+        return json!({
+            "uri": target_uri,
+            "range": {
+                "start": { "line": line, "character": col },
+                "end": { "line": line, "character": col + len }
+            }
+        });
     }
 
     Value::Null

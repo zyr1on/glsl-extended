@@ -20,6 +20,12 @@ pub struct AnalyzerBridge {
     is_alive: Arc<AtomicBool>,
 }
 
+#[inline]
+fn format_rpc_payload(val: &Value) -> String {
+    let payload = val.to_string();
+    format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload)
+}
+
 impl AnalyzerBridge {
     pub fn start(binary_path: &str) -> Option<Self> {
         let mut cmd = crate::create_command(binary_path);
@@ -118,13 +124,11 @@ impl AnalyzerBridge {
         if !self.is_alive() {
             return;
         }
-        let notif = json!({
+        let wire = format_rpc_payload(&json!({
             "jsonrpc": "2.0",
             "method": method,
             "params": params
-        });
-        let payload = notif.to_string();
-        let wire = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
+        }));
         if let Ok(mut stdin) = self.stdin.lock() {
             if stdin.write_all(wire.as_bytes()).is_err() || stdin.flush().is_err() {
                 self.is_alive.store(false, Ordering::Relaxed);
@@ -137,14 +141,12 @@ impl AnalyzerBridge {
             return None;
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let req = json!({
+        let wire = format_rpc_payload(&json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params
-        });
-        let payload = req.to_string();
-        let wire = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
+        }));
 
         let (tx, rx) = mpsc::channel();
         {

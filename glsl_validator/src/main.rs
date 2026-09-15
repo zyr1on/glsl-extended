@@ -159,100 +159,96 @@ pub fn get_zed_extension_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-pub fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
-    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
-    let zed_dirs = get_zed_extension_dirs();
+fn resolve_candidate_path(path_str: &str, zed_dirs: &[PathBuf]) -> Option<String> {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if Path::new(trimmed).is_file() {
+        return Some(trimmed.to_string());
+    }
+    for dir in zed_dirs {
+        let cand = dir.join(trimmed);
+        if cand.is_file() {
+            return Some(cand.to_string_lossy().to_string());
+        }
+    }
+    if let Some(p) = find_in_path(trimmed) {
+        return Some(p.to_string_lossy().to_string());
+    }
+    if is_in_path(trimmed) {
+        return Some(trimmed.to_string());
+    }
+    None
+}
 
-    // 1. Explicit user configuration from Zed settings.json
-    if let Some(custom) = custom_path {
-        let trimmed = custom.trim();
-        if !trimmed.is_empty() {
-            if Path::new(trimmed).is_file() {
-                return Some(trimmed.to_string());
-            }
-            for dir in &zed_dirs {
-                let cand = dir.join(trimmed);
+fn search_zed_dirs(zed_dirs: &[PathBuf], names: &[&str], dir_prefix: &str, exe_ext: &str) -> Option<String> {
+    for dir in zed_dirs {
+        for &name in names {
+            let direct = [
+                dir.join(format!("{name}{exe_ext}")),
+                dir.join("bin").join(format!("{name}{exe_ext}")),
+            ];
+            for cand in direct {
                 if cand.is_file() {
                     return Some(cand.to_string_lossy().to_string());
                 }
-            }
-            if let Some(p) = find_in_path(trimmed) {
-                return Some(p.to_string_lossy().to_string());
-            }
-            if is_in_path(trimmed) {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-
-    // 2. Explicit user environment variable override
-    if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
-        let trimmed = env_path.trim();
-        if Path::new(trimmed).is_file() {
-            return Some(trimmed.to_string());
-        }
-        for dir in &zed_dirs {
-            let cand = dir.join(trimmed);
-            if cand.is_file() {
-                return Some(cand.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    // 3. Primary: System PATH (universal across Windows, Linux, macOS)
-    if let Some(p) = find_in_path("glslangValidator") {
-        return Some(p.to_string_lossy().to_string());
-    }
-    if let Some(p) = find_in_path("glslang") {
-        return Some(p.to_string_lossy().to_string());
-    }
-    if is_in_path("glslangValidator") {
-        return Some("glslangValidator".to_string());
-    }
-    if is_in_path("glslang") {
-        return Some("glslang".to_string());
-    }
-
-    // 4. Check Zed extension work & installed directories
-    for dir in &zed_dirs {
-        let direct_candidates = [
-            dir.join(format!("glslangValidator{exe_ext}")),
-            dir.join(format!("glslang{exe_ext}")),
-            dir.join("bin").join(format!("glslangValidator{exe_ext}")),
-            dir.join("bin").join(format!("glslang{exe_ext}")),
-        ];
-        for cand in direct_candidates {
-            if cand.is_file() {
-                return Some(cand.to_string_lossy().to_string());
             }
         }
 
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir()
-                    && path
-                        .file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with("glslang-"))
-                {
+                if path.is_dir() && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(dir_prefix)) {
                     let bin_dir = path.join("bin");
-                    let candidates = [
-                        bin_dir.join(format!("glslangValidator{exe_ext}")),
-                        bin_dir.join(format!("glslang{exe_ext}")),
-                        path.join(format!("glslangValidator{exe_ext}")),
-                        path.join(format!("glslang{exe_ext}")),
-                    ];
-                    for cand in candidates {
-                        if cand.is_file() {
-                            return Some(cand.to_string_lossy().to_string());
+                    for &name in names {
+                        let candidates = [
+                            bin_dir.join(format!("{name}{exe_ext}")),
+                            path.join(format!("{name}{exe_ext}")),
+                        ];
+                        for cand in candidates {
+                            if cand.is_file() {
+                                return Some(cand.to_string_lossy().to_string());
+                            }
                         }
                     }
                 }
             }
         }
     }
+    None
+}
 
-    // 5. Vulkan SDK standard environment variable
+pub fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
+    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
+    let zed_dirs = get_zed_extension_dirs();
+
+    // 1. Explicit user configuration or environment override
+    if let Some(custom) = custom_path.and_then(|c| resolve_candidate_path(c, &zed_dirs)) {
+        return Some(custom);
+    }
+    if let Ok(env_path) = std::env::var("GLSLANG_VALIDATOR_PATH") {
+        if let Some(p) = resolve_candidate_path(&env_path, &zed_dirs) {
+            return Some(p);
+        }
+    }
+
+    // 2. Primary: System PATH
+    for name in ["glslangValidator", "glslang"] {
+        if let Some(p) = find_in_path(name) {
+            return Some(p.to_string_lossy().to_string());
+        }
+        if is_in_path(name) {
+            return Some(name.to_string());
+        }
+    }
+
+    // 3. Zed extension work & installed directories
+    if let Some(p) = search_zed_dirs(&zed_dirs, &["glslangValidator", "glslang"], "glslang-", exe_ext) {
+        return Some(p);
+    }
+
+    // 4. Vulkan SDK standard environment variable
     if let Ok(vk_sdk) = std::env::var("VULKAN_SDK") {
         let vk_bin = Path::new(&vk_sdk).join("bin").join(format!("glslangValidator{exe_ext}"));
         if vk_bin.is_file() {
@@ -260,7 +256,7 @@ pub fn find_glslang_validator(custom_path: Option<&str>) -> Option<String> {
         }
     }
 
-    // 6. Platform-specific fallback search paths
+    // 5. Platform-specific fallback search paths
     #[cfg(windows)]
     {
         let mut candidates = vec![
@@ -307,43 +303,17 @@ pub fn find_glsl_analyzer(custom_path: Option<&str>) -> Option<String> {
     let exe_ext = if cfg!(windows) { ".exe" } else { "" };
     let zed_dirs = get_zed_extension_dirs();
 
-    // 1. Explicit user configuration from Zed settings.json
-    if let Some(custom) = custom_path {
-        let trimmed = custom.trim();
-        if !trimmed.is_empty() {
-            if Path::new(trimmed).is_file() {
-                return Some(trimmed.to_string());
-            }
-            for dir in &zed_dirs {
-                let cand = dir.join(trimmed);
-                if cand.is_file() {
-                    return Some(cand.to_string_lossy().to_string());
-                }
-            }
-            if let Some(p) = find_in_path(trimmed) {
-                return Some(p.to_string_lossy().to_string());
-            }
-            if is_in_path(trimmed) {
-                return Some(trimmed.to_string());
-            }
-        }
+    // 1. Explicit user configuration or environment override
+    if let Some(custom) = custom_path.and_then(|c| resolve_candidate_path(c, &zed_dirs)) {
+        return Some(custom);
     }
-
-    // 2. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("GLSL_ANALYZER_PATH") {
-        let trimmed = env_path.trim();
-        if Path::new(trimmed).is_file() {
-            return Some(trimmed.to_string());
-        }
-        for dir in &zed_dirs {
-            let cand = dir.join(trimmed);
-            if cand.is_file() {
-                return Some(cand.to_string_lossy().to_string());
-            }
+        if let Some(p) = resolve_candidate_path(&env_path, &zed_dirs) {
+            return Some(p);
         }
     }
 
-    // 3. Primary: System PATH
+    // 2. Primary: System PATH
     if let Some(p) = find_in_path("glsl_analyzer") {
         return Some(p.to_string_lossy().to_string());
     }
@@ -351,42 +321,12 @@ pub fn find_glsl_analyzer(custom_path: Option<&str>) -> Option<String> {
         return Some("glsl_analyzer".to_string());
     }
 
-    // 4. Check Zed extension work & installed directories
-    for dir in &zed_dirs {
-        let direct_candidates = [
-            dir.join(format!("glsl_analyzer{exe_ext}")),
-            dir.join("bin").join(format!("glsl_analyzer{exe_ext}")),
-        ];
-        for cand in direct_candidates {
-            if cand.is_file() {
-                return Some(cand.to_string_lossy().to_string());
-            }
-        }
-
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir()
-                    && path
-                        .file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with("glsl_analyzer-"))
-                {
-                    let bin_dir = path.join("bin");
-                    let candidates = [
-                        bin_dir.join(format!("glsl_analyzer{exe_ext}")),
-                        path.join(format!("glsl_analyzer{exe_ext}")),
-                    ];
-                    for cand in candidates {
-                        if cand.is_file() {
-                            return Some(cand.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-        }
+    // 3. Zed extension work & installed directories
+    if let Some(p) = search_zed_dirs(&zed_dirs, &["glsl_analyzer"], "glsl_analyzer-", exe_ext) {
+        return Some(p);
     }
 
-    // 5. User cargo bin directory (~/.cargo/bin/glsl_analyzer)
+    // 4. User cargo bin directory (~/.cargo/bin/glsl_analyzer)
     if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
         let cargo_bin = PathBuf::from(home)
             .join(".cargo")
@@ -611,30 +551,21 @@ pub fn path_to_uri(path: &Path) -> String {
 pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(file_path) = uri_to_path(uri) {
-        if let Some(parent) = file_path.parent() {
-            if parent.is_dir() {
-                dirs.push(parent.to_path_buf());
-                let inc = parent.join("include");
-                if inc.is_dir() {
-                    dirs.push(inc);
-                }
-                let shaders = parent.join("shaders");
-                if shaders.is_dir() {
-                    dirs.push(shaders);
-                }
-            }
-            if let Some(grandparent) = parent.parent() {
-                if grandparent.is_dir() {
-                    dirs.push(grandparent.to_path_buf());
-                    let inc = grandparent.join("include");
-                    if inc.is_dir() && !dirs.contains(&inc) {
-                        dirs.push(inc);
+        let mut cur = file_path.parent();
+        for _ in 0..2 {
+            if let Some(dir) = cur {
+                if dir.is_dir() {
+                    if !dirs.contains(&dir.to_path_buf()) {
+                        dirs.push(dir.to_path_buf());
                     }
-                    let shaders = grandparent.join("shaders");
-                    if shaders.is_dir() && !dirs.contains(&shaders) {
-                        dirs.push(shaders);
+                    for sub in ["include", "shaders"] {
+                        let sub_dir = dir.join(sub);
+                        if sub_dir.is_dir() && !dirs.contains(&sub_dir) {
+                            dirs.push(sub_dir);
+                        }
                     }
                 }
+                cur = dir.parent();
             }
         }
     }
@@ -1351,113 +1282,72 @@ pub fn generate_swizzle_completions(dim: usize) -> Vec<Value> {
         }));
     };
 
-    match dim {
-        2 => {
-            // 1-component (float)
-            add_item("x", "float", "X coordinate component", "01");
-            add_item("y", "float", "Y coordinate component", "01");
-            add_item("r", "float", "Red color component", "01");
-            add_item("g", "float", "Green color component", "01");
-            add_item("s", "float", "S texture coordinate", "01");
-            add_item("t", "float", "T texture coordinate", "01");
+    let single_comps = match dim {
+        2 => &[("x", "X coordinate component"), ("y", "Y coordinate component"),
+               ("r", "Red color component"), ("g", "Green color component"),
+               ("s", "S texture coordinate"), ("t", "T texture coordinate")][..],
+        3 => &[("x", "X coordinate component"), ("y", "Y coordinate component"), ("z", "Z coordinate component"),
+               ("r", "Red color component"), ("g", "Green color component"), ("b", "Blue color component"),
+               ("s", "S texture coordinate"), ("t", "T texture coordinate"), ("p", "P texture coordinate")][..],
+        _ => &[("x", "X coordinate component"), ("y", "Y coordinate component"), ("z", "Z coordinate component"), ("w", "W coordinate component"),
+               ("r", "Red color component"), ("g", "Green color component"), ("b", "Blue color component"), ("a", "Alpha color component"),
+               ("s", "S texture coordinate"), ("t", "T texture coordinate"), ("p", "P texture coordinate"), ("q", "Q texture coordinate")][..],
+    };
+    for (name, doc) in single_comps {
+        add_item(name, "float", doc, "01");
+    }
 
-            // 2-component (vec2)
-            add_item("xy", "vec2", "XY 2D coordinate swizzle", "02");
-            add_item("yx", "vec2", "YX reversed 2D coordinate swizzle", "02");
-            add_item("xx", "vec2", "XX duplicate swizzle", "02");
-            add_item("yy", "vec2", "YY duplicate swizzle", "02");
-            add_item("rg", "vec2", "RG 2D color swizzle", "02");
-            add_item("gr", "vec2", "GR reversed color swizzle", "02");
-            add_item("st", "vec2", "ST 2D texture coordinate swizzle", "02");
-            add_item("ts", "vec2", "TS reversed texture swizzle", "02");
+    let pairs = match dim {
+        2 => &[
+            ("xy", "XY 2D coordinate swizzle"), ("yx", "YX reversed 2D coordinate swizzle"),
+            ("xx", "XX duplicate swizzle"), ("yy", "YY duplicate swizzle"),
+            ("rg", "RG 2D color swizzle"), ("gr", "GR reversed color swizzle"),
+            ("st", "ST 2D texture coordinate swizzle"), ("ts", "TS reversed texture swizzle"),
+        ][..],
+        3 => &[
+            ("xy", "XY 2D coordinate swizzle"), ("xz", "XZ 2D coordinate swizzle"), ("yz", "YZ 2D coordinate swizzle"),
+            ("yx", "YX 2D coordinate swizzle"), ("zx", "ZX 2D coordinate swizzle"), ("zy", "ZY 2D coordinate swizzle"),
+            ("rg", "RG color swizzle"), ("rb", "RB color swizzle"), ("gb", "GB color swizzle"),
+        ][..],
+        _ => &[
+            ("xy", "XY 2D coordinate swizzle"), ("xz", "XZ 2D coordinate swizzle"), ("xw", "XW 2D coordinate swizzle"),
+            ("yz", "YZ 2D coordinate swizzle"), ("yw", "YW 2D coordinate swizzle"), ("zw", "ZW 2D coordinate swizzle"),
+            ("rg", "RG 2D color swizzle"), ("rb", "RB 2D color swizzle"), ("ra", "RA 2D color swizzle"),
+            ("gb", "GB 2D color swizzle"), ("ba", "BA 2D color swizzle"), ("st", "ST 2D texture coordinate swizzle"),
+        ][..],
+    };
+    for (name, doc) in pairs {
+        add_item(name, "vec2", doc, "02");
+    }
 
-            // 3-component (vec3)
-            add_item("xxx", "vec3", "XXX 3D swizzle", "03");
-            add_item("xyx", "vec3", "XYX 3D swizzle", "03");
-            add_item("xyy", "vec3", "XYY 3D swizzle", "03");
-            add_item("rgb", "vec3", "RGB 3D color swizzle", "03");
-        }
-        3 => {
-            // 1-component (float)
-            add_item("x", "float", "X coordinate component", "01");
-            add_item("y", "float", "Y coordinate component", "01");
-            add_item("z", "float", "Z coordinate component", "01");
-            add_item("r", "float", "Red color component", "01");
-            add_item("g", "float", "Green color component", "01");
-            add_item("b", "float", "Blue color component", "01");
-            add_item("s", "float", "S texture coordinate", "01");
-            add_item("t", "float", "T texture coordinate", "01");
-            add_item("p", "float", "P texture coordinate", "01");
+    let triplets = match dim {
+        2 => &[
+            ("xxx", "XXX 3D swizzle"), ("xyx", "XYX 3D swizzle"), ("xyy", "XYY 3D swizzle"), ("rgb", "RGB 3D color swizzle"),
+        ][..],
+        3 => &[
+            ("xyz", "XYZ 3D coordinate swizzle"), ("xzy", "XZY 3D coordinate swizzle"),
+            ("yxz", "YXZ 3D coordinate swizzle"), ("yzx", "YZX 3D coordinate swizzle"),
+            ("zxy", "ZXY 3D coordinate swizzle"), ("zyx", "ZYX reversed 3D coordinate swizzle"),
+            ("rgb", "RGB 3D color swizzle"), ("bgr", "BGR reversed 3D color swizzle"), ("stp", "STP 3D texture coordinate swizzle"),
+        ][..],
+        _ => &[
+            ("xyz", "XYZ 3D coordinate swizzle"), ("xyw", "XYW 3D coordinate swizzle"),
+            ("xzw", "XZW 3D coordinate swizzle"), ("yzw", "YZW 3D coordinate swizzle"),
+            ("zyx", "ZYX reversed 3D coordinate swizzle"), ("rgb", "RGB 3D color swizzle"),
+            ("bgr", "BGR reversed 3D color swizzle"), ("stp", "STP 3D texture coordinate swizzle"),
+        ][..],
+    };
+    for (name, doc) in triplets {
+        add_item(name, "vec3", doc, "03");
+    }
 
-            // 2-component (vec2)
-            add_item("xy", "vec2", "XY 2D coordinate swizzle", "02");
-            add_item("xz", "vec2", "XZ 2D coordinate swizzle", "02");
-            add_item("yz", "vec2", "YZ 2D coordinate swizzle", "02");
-            add_item("yx", "vec2", "YX 2D coordinate swizzle", "02");
-            add_item("zx", "vec2", "ZX 2D coordinate swizzle", "02");
-            add_item("zy", "vec2", "ZY 2D coordinate swizzle", "02");
-            add_item("rg", "vec2", "RG color swizzle", "02");
-            add_item("rb", "vec2", "RB color swizzle", "02");
-            add_item("gb", "vec2", "GB color swizzle", "02");
-
-            // 3-component (vec3)
-            add_item("xyz", "vec3", "XYZ 3D coordinate swizzle", "03");
-            add_item("xzy", "vec3", "XZY 3D coordinate swizzle", "03");
-            add_item("yxz", "vec3", "YXZ 3D coordinate swizzle", "03");
-            add_item("yzx", "vec3", "YZX 3D coordinate swizzle", "03");
-            add_item("zxy", "vec3", "ZXY 3D coordinate swizzle", "03");
-            add_item("zyx", "vec3", "ZYX reversed 3D coordinate swizzle", "03");
-            add_item("rgb", "vec3", "RGB 3D color swizzle", "03");
-            add_item("bgr", "vec3", "BGR reversed 3D color swizzle", "03");
-            add_item("stp", "vec3", "STP 3D texture coordinate swizzle", "03");
-        }
-        _ => {
-            // 1-component (float)
-            add_item("x", "float", "X coordinate component", "01");
-            add_item("y", "float", "Y coordinate component", "01");
-            add_item("z", "float", "Z coordinate component", "01");
-            add_item("w", "float", "W coordinate component", "01");
-            add_item("r", "float", "Red color component", "01");
-            add_item("g", "float", "Green color component", "01");
-            add_item("b", "float", "Blue color component", "01");
-            add_item("a", "float", "Alpha color component", "01");
-            add_item("s", "float", "S texture coordinate", "01");
-            add_item("t", "float", "T texture coordinate", "01");
-            add_item("p", "float", "P texture coordinate", "01");
-            add_item("q", "float", "Q texture coordinate", "01");
-
-            // 2-component (vec2)
-            add_item("xy", "vec2", "XY 2D coordinate swizzle", "02");
-            add_item("xz", "vec2", "XZ 2D coordinate swizzle", "02");
-            add_item("xw", "vec2", "XW 2D coordinate swizzle", "02");
-            add_item("yz", "vec2", "YZ 2D coordinate swizzle", "02");
-            add_item("yw", "vec2", "YW 2D coordinate swizzle", "02");
-            add_item("zw", "vec2", "ZW 2D coordinate swizzle", "02");
-            add_item("rg", "vec2", "RG 2D color swizzle", "02");
-            add_item("rb", "vec2", "RB 2D color swizzle", "02");
-            add_item("ra", "vec2", "RA 2D color swizzle", "02");
-            add_item("gb", "vec2", "GB 2D color swizzle", "02");
-            add_item("ba", "vec2", "BA 2D color swizzle", "02");
-            add_item("st", "vec2", "ST 2D texture coordinate swizzle", "02");
-
-            // 3-component (vec3)
-            add_item("xyz", "vec3", "XYZ 3D coordinate swizzle", "03");
-            add_item("xyw", "vec3", "XYW 3D coordinate swizzle", "03");
-            add_item("xzw", "vec3", "XZW 3D coordinate swizzle", "03");
-            add_item("yzw", "vec3", "YZW 3D coordinate swizzle", "03");
-            add_item("zyx", "vec3", "ZYX reversed 3D coordinate swizzle", "03");
-            add_item("rgb", "vec3", "RGB 3D color swizzle", "03");
-            add_item("bgr", "vec3", "BGR reversed 3D color swizzle", "03");
-            add_item("stp", "vec3", "STP 3D texture coordinate swizzle", "03");
-
-            // 4-component (vec4)
-            add_item("xyzw", "vec4", "XYZW 4D full coordinate swizzle", "04");
-            add_item("wzyx", "vec4", "WZYX reversed coordinate swizzle", "04");
-            add_item("rgba", "vec4", "RGBA 4D full color swizzle", "04");
-            add_item("abgr", "vec4", "ABGR reversed color swizzle", "04");
-            add_item("bgra", "vec4", "BGRA color swizzle", "04");
-            add_item("argb", "vec4", "ARGB color swizzle", "04");
-            add_item("stpq", "vec4", "STPQ 4D full texture swizzle", "04");
+    if dim >= 4 {
+        for (name, doc) in [
+            ("xyzw", "XYZW 4D full coordinate swizzle"), ("wzyx", "WZYX reversed coordinate swizzle"),
+            ("rgba", "RGBA 4D full color swizzle"), ("abgr", "ABGR reversed color swizzle"),
+            ("bgra", "BGRA color swizzle"), ("argb", "ARGB color swizzle"), ("stpq", "STPQ 4D full texture swizzle"),
+        ] {
+            add_item(name, "vec4", doc, "04");
         }
     }
 
@@ -1672,6 +1562,39 @@ fn push_swizzle_completions(
     }
 }
 
+fn make_completion_item(
+    label: &str,
+    kind: u64,
+    detail: &str,
+    doc: &str,
+    insert: (&str, u64),
+    range: &Value,
+    sort_text: &str,
+) -> Value {
+    let (insert_text, insert_format) = insert;
+    let mut item = json!({
+        "label": label,
+        "kind": kind,
+        "detail": detail,
+        "insertText": insert_text,
+        "insertTextFormat": insert_format,
+        "textEdit": {
+            "range": range,
+            "newText": insert_text
+        },
+        "sortText": sort_text
+    });
+    if !doc.is_empty() {
+        if let Some(obj) = item.as_object_mut() {
+            obj.insert("documentation".to_string(), json!({
+                "kind": "markdown",
+                "value": doc
+            }));
+        }
+    }
+    item
+}
+
 fn push_struct_member_completions(
     items: &mut Vec<Value>,
     seen_labels: &mut HashSet<String>,
@@ -1683,18 +1606,10 @@ fn push_struct_member_completions(
         if (member_word.is_empty() || starts_with_ignore_ascii_case(&field_name, member_word))
             && seen_labels.insert(field_name.clone())
         {
-            items.push(json!({
-                "label": field_name,
-                "kind": 5, // Field
-                "detail": field_type,
-                "insertText": field_name,
-                "insertTextFormat": 1,
-                "textEdit": {
-                    "range": member_range,
-                    "newText": field_name
-                },
-                "sortText": format!("00_{}", field_name)
-            }));
+            let sort_text = format!("00_{field_name}");
+            items.push(make_completion_item(
+                &field_name, 5, &field_type, "", (&field_name, 1), member_range, &sort_text,
+            ));
         }
     }
 }
@@ -1717,29 +1632,12 @@ fn push_user_var_completions(
             };
 
             let detail = format!("{} {}", var.qualifier, var.var_type);
-            let doc_text = match (&var.source, &var.doc) {
-                (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
-                (Some(src), None) => format!("*Defined in `{src}`*"),
-                (None, Some(d)) => d.clone(),
-                (None, None) => String::new(),
-            };
+            let doc_text = signature::format_symbol_doc(var.source.as_deref(), var.doc.as_deref());
+            let sort_text = format!("00_{}", var.name);
 
-            items.push(json!({
-                "label": var.name,
-                "kind": kind,
-                "detail": detail,
-                "documentation": {
-                    "kind": "markdown",
-                    "value": doc_text,
-                },
-                "insertText": var.name,
-                "insertTextFormat": 1,
-                "textEdit": {
-                    "range": replace_range,
-                    "newText": var.name
-                },
-                "sortText": format!("00_{}", var.name),
-            }));
+            items.push(make_completion_item(
+                &var.name, kind, &detail, &doc_text, (&var.name, 1), replace_range, &sort_text,
+            ));
         }
     }
 }
@@ -1756,14 +1654,7 @@ fn push_user_func_completions(
         if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
             && seen_labels.insert(func.name.clone())
         {
-            let detail = func.label.clone();
-            let doc_text = match (&func.source, &func.doc) {
-                (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
-                (Some(src), None) => format!("*Defined in `{src}`*"),
-                (None, Some(d)) => d.clone(),
-                (None, None) => String::new(),
-            };
-
+            let doc_text = signature::format_symbol_doc(func.source.as_deref(), func.doc.as_deref());
             let (insert_text, insert_format) = if following_has_paren {
                 (func.name.clone(), 1)
             } else if func.parameters.is_empty() {
@@ -1771,23 +1662,11 @@ fn push_user_func_completions(
             } else {
                 (format!("{}($1)$0", func.name), 2)
             };
+            let sort_text = format!("01_{}", func.name);
 
-            items.push(json!({
-                "label": func.name,
-                "kind": 3, // Function
-                "detail": detail,
-                "documentation": {
-                    "kind": "markdown",
-                    "value": doc_text,
-                },
-                "insertText": insert_text,
-                "insertTextFormat": insert_format,
-                "textEdit": {
-                    "range": replace_range,
-                    "newText": insert_text
-                },
-                "sortText": format!("01_{}", func.name),
-            }));
+            items.push(make_completion_item(
+                &func.name, 3, &func.label, &doc_text, (&insert_text, insert_format), replace_range, &sort_text,
+            ));
         }
     }
 }
@@ -1861,22 +1740,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
     for b_type in docs::get_all_types() {
         if word.is_empty() || starts_with_ignore_ascii_case(b_type.name, word) {
             if seen_labels.insert(b_type.name.to_string()) {
-                items.push(json!({
-                    "label": b_type.name,
-                    "kind": 25, // TypeParameter / Class
-                    "detail": b_type.detail,
-                    "documentation": {
-                        "kind": "markdown",
-                        "value": b_type.description,
-                    },
-                    "insertText": b_type.name,
-                    "insertTextFormat": 1,
-                    "textEdit": {
-                        "range": replace_range,
-                        "newText": b_type.name
-                    },
-                    "sortText": format!("02_{}", b_type.name),
-                }));
+                let sort_text = format!("02_{}", b_type.name);
+                items.push(make_completion_item(
+                    b_type.name, 25, b_type.detail, b_type.description, (b_type.name, 1), &replace_range, &sort_text,
+                ));
             }
 
             if b_type.has_constructor {
@@ -1887,22 +1754,11 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                     } else {
                         (format!("{}($1)$0", b_type.name), 2)
                     };
-                    items.push(json!({
-                        "label": ctor_label,
-                        "kind": 4, // Constructor
-                        "detail": format!("{} constructor", b_type.name),
-                        "documentation": {
-                            "kind": "markdown",
-                            "value": b_type.description,
-                        },
-                        "insertText": insert_text,
-                        "insertTextFormat": insert_format,
-                        "textEdit": {
-                            "range": replace_range,
-                            "newText": insert_text
-                        },
-                        "sortText": format!("02_{}_ctor", b_type.name),
-                    }));
+                    let sort_text = format!("02_{}_ctor", b_type.name);
+                    let detail = format!("{} constructor", b_type.name);
+                    items.push(make_completion_item(
+                        &ctor_label, 4, &detail, b_type.description, (&insert_text, insert_format), &replace_range, &sort_text,
+                    ));
                 }
             }
         }
@@ -1924,23 +1780,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
                     (format!("{}()$0", builtin.name), 2)
                 }
             };
-
-            items.push(json!({
-                "label": builtin.name,
-                "kind": 3, // Function
-                "detail": first_overload,
-                "documentation": {
-                    "kind": "markdown",
-                    "value": builtin.description,
-                },
-                "insertText": insert_text,
-                "insertTextFormat": insert_format,
-                "textEdit": {
-                    "range": replace_range,
-                    "newText": insert_text
-                },
-                "sortText": format!("03_{}", builtin.name),
-            }));
+            let sort_text = format!("03_{}", builtin.name);
+            items.push(make_completion_item(
+                builtin.name, 3, first_overload, builtin.description, (&insert_text, insert_format), &replace_range, &sort_text,
+            ));
         }
     }
 
@@ -1949,22 +1792,11 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         if (word.is_empty() || starts_with_ignore_ascii_case(b_var.name, word))
             && seen_labels.insert(b_var.name.to_string())
         {
-            items.push(json!({
-                "label": b_var.name,
-                "kind": 6, // Variable
-                "detail": format!("{} {}", b_var.stage, b_var.var_type),
-                "documentation": {
-                    "kind": "markdown",
-                    "value": b_var.description,
-                },
-                "insertText": b_var.name,
-                "insertTextFormat": 1,
-                "textEdit": {
-                    "range": replace_range,
-                    "newText": b_var.name
-                },
-                "sortText": format!("04_{}", b_var.name),
-            }));
+            let detail = format!("{} {}", b_var.stage, b_var.var_type);
+            let sort_text = format!("04_{}", b_var.name);
+            items.push(make_completion_item(
+                b_var.name, 6, &detail, b_var.description, (b_var.name, 1), &replace_range, &sort_text,
+            ));
         }
     }
 
@@ -1973,22 +1805,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
         if (word.is_empty() || starts_with_ignore_ascii_case(kw.name, word))
             && seen_labels.insert(kw.name.to_string())
         {
-            items.push(json!({
-                "label": kw.name,
-                "kind": 14, // Keyword
-                "detail": kw.detail,
-                "documentation": {
-                    "kind": "markdown",
-                    "value": kw.description,
-                },
-                "insertText": kw.name,
-                "insertTextFormat": 1,
-                "textEdit": {
-                    "range": replace_range,
-                    "newText": kw.name
-                },
-                "sortText": format!("05_{}", kw.name),
-            }));
+            let sort_text = format!("05_{}", kw.name);
+            items.push(make_completion_item(
+                kw.name, 14, kw.detail, kw.description, (kw.name, 1), &replace_range, &sort_text,
+            ));
         }
     }
 
@@ -2013,23 +1833,10 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
             } else {
                 dir.name.to_string()
             };
-
-            items.push(json!({
-                "label": dir.name,
-                "kind": 14, // Keyword
-                "detail": dir.detail,
-                "documentation": {
-                    "kind": "markdown",
-                    "value": dir.description,
-                },
-                "insertText": insert_text,
-                "insertTextFormat": 1,
-                "textEdit": {
-                    "range": replace_range,
-                    "newText": insert_text
-                },
-                "sortText": format!("06_{}", dir.name),
-            }));
+            let sort_text = format!("06_{}", dir.name);
+            items.push(make_completion_item(
+                dir.name, 14, dir.detail, dir.description, (&insert_text, 1), &replace_range, &sort_text,
+            ));
         }
     }
 
@@ -2218,30 +2025,16 @@ fn warn_missing_clang_format() {
 }
 
 fn find_clang_format(custom_path: Option<&str>) -> Option<String> {
-    // 1. Explicit user configuration from Zed settings.json
-    if let Some(custom) = custom_path {
-        let trimmed = custom.trim();
-        if !trimmed.is_empty() {
-            if Path::new(trimmed).is_file() {
-                return Some(trimmed.to_string());
-            }
-            if let Some(p) = find_in_path(trimmed) {
-                return Some(p.to_string_lossy().to_string());
-            }
-            if is_in_path(trimmed) {
-                return Some(trimmed.to_string());
-            }
-        }
+    let zed_dirs = get_zed_extension_dirs();
+    if let Some(custom) = custom_path.and_then(|c| resolve_candidate_path(c, &zed_dirs)) {
+        return Some(custom);
     }
-
-    // 2. Explicit user environment variable override
     if let Ok(env_path) = std::env::var("CLANG_FORMAT_PATH") {
-        if Path::new(&env_path).exists() {
-            return Some(env_path);
+        if let Some(p) = resolve_candidate_path(&env_path, &zed_dirs) {
+            return Some(p);
         }
     }
 
-    // 2. Primary: System PATH (universal across Windows, Linux, macOS)
     if let Some(p) = find_in_path("clang-format") {
         return Some(p.to_string_lossy().to_string());
     }
@@ -4172,141 +3965,6 @@ void main() {
         assert!(!fallback_struct_items.iter().any(|i| i["label"] == "x"));
         assert!(!fallback_struct_items.iter().any(|i| i["label"] == "xyzw"));
     }
-
-    #[test]
-    fn test_benchmarks_ram_and_cpu() {
-        let doc = r#"struct Material {
-    vec4 test;
-    float a;
-};
-void main() {
-    Material mat;
-    vec4 color = vec4(1.0);
-    mat.
 }
-"#;
-        let mut doc_cache = HashMap::new();
-        doc_cache.insert("file:///bench.frag".to_string(), doc.to_string());
-        let user_vars = signature::scan_user_variables(doc, None, Some("file:///bench.frag"));
 
-        let iters = 10_000;
-
-        // 1. Benchmark vector dimension inference (positive vec4 case)
-        let start = std::time::Instant::now();
-        for _ in 0..iters {
-            let dim = infer_vector_dimension_from_vars(&user_vars, doc, "color");
-            assert_eq!(dim, Some(4));
-        }
-        let elapsed_vec = start.elapsed();
-        let per_op_vec_ns = elapsed_vec.as_nanos() / iters as u128;
-
-        // 2. Benchmark struct swizzle elimination (rejection of struct type to None)
-        let start = std::time::Instant::now();
-        for _ in 0..iters {
-            let dim = infer_vector_dimension_from_vars(&user_vars, doc, "mat");
-            assert_eq!(dim, None);
-        }
-        let elapsed_struct = start.elapsed();
-        let per_op_struct_ns = elapsed_struct.as_nanos() / iters as u128;
-
-        // 3. Benchmark struct member extraction (mat -> [test, a])
-        let start = std::time::Instant::now();
-        for _ in 0..iters {
-            let members = extract_struct_members(&user_vars, doc, &doc_cache, "mat");
-            assert_eq!(members.len(), 2);
-        }
-        let elapsed_members = start.elapsed();
-        let per_op_members_ns = elapsed_members.as_nanos() / iters as u128;
-
-        // 4. Benchmark full autocomplete with #include (End-to-End handle_completion)
-        let common_uri = "file:///project/shaders/common.glsl";
-        let common_code = "void calculateLighting() {}\nvec4 lightColor = vec4(1.0);\n";
-        doc_cache.insert(common_uri.to_string(), common_code.to_string());
-
-        let inc_shader_uri = "file:///project/shaders/scene.frag";
-        let inc_shader_code = "#include \"common.glsl\"\nvoid main() {\n    calc\n}";
-        doc_cache.insert(inc_shader_uri.to_string(), inc_shader_code.to_string());
-
-        let req_include = json!({
-            "params": {
-                "textDocument": { "uri": inc_shader_uri },
-                "position": { "line": 2, "character": 8 }
-            }
-        });
-
-        let iters_lsp = 5_000;
-        let start = std::time::Instant::now();
-        for _ in 0..iters_lsp {
-            let res = handle_completion(&req_include, &doc_cache);
-            assert!(res.as_array().is_some_and(|a| !a.is_empty()));
-        }
-        let elapsed_inc_comp = start.elapsed();
-        let per_op_inc_comp_us = elapsed_inc_comp.as_micros() / iters_lsp as u128;
-
-        // 5. Benchmark vector swizzle autocomplete (End-to-End handle_completion on 'color.')
-        let swizzle_shader_code = "void main() {\n    vec4 color = vec4(1.0);\n    color.xy\n}";
-        let swizzle_uri = "file:///project/shaders/swizzle.frag";
-        doc_cache.insert(swizzle_uri.to_string(), swizzle_shader_code.to_string());
-
-        let req_swizzle = json!({
-            "params": {
-                "textDocument": { "uri": swizzle_uri },
-                "position": { "line": 2, "character": 12 }
-            }
-        });
-
-        let start = std::time::Instant::now();
-        for _ in 0..iters_lsp {
-            let res = handle_completion(&req_swizzle, &doc_cache);
-            assert!(res.as_array().is_some_and(|a| !a.is_empty()));
-        }
-        let elapsed_swizzle_comp = start.elapsed();
-        let per_op_swizzle_comp_us = elapsed_swizzle_comp.as_micros() / iters_lsp as u128;
-
-        #[cfg(windows)]
-        let (ws, priv_mem) = {
-            use std::mem::zeroed;
-            #[repr(C)]
-            struct ProcessMemoryCounters {
-                cb: u32,
-                page_fault_count: u32,
-                peak_working_set_size: usize,
-                working_set_size: usize,
-                quota_peak_paged_pool_usage: usize,
-                quota_paged_pool_usage: usize,
-                quota_peak_non_paged_pool_usage: usize,
-                quota_non_paged_pool_usage: usize,
-                pagefile_usage: usize,
-                peak_pagefile_usage: usize,
-            }
-            extern "system" {
-                fn GetCurrentProcess() -> isize;
-                fn K32GetProcessMemoryInfo(process: isize, counters: *mut ProcessMemoryCounters, cb: u32) -> i32;
-            }
-            unsafe {
-                let mut counters: ProcessMemoryCounters = zeroed();
-                counters.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
-                if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 {
-                    (counters.working_set_size, counters.pagefile_usage)
-                } else {
-                    (0, 0)
-                }
-            }
-        };
-
-        println!("\n=================== BENCHMARK REPORT ===================");
-        println!("Iterations: 10,000 unit / 5,000 full end-to-end LSP requests");
-        println!("Vector Dim Inference ('color' -> vec4)     : {} ns/op (Total: {:?})", per_op_vec_ns, elapsed_vec);
-        println!("Struct Rejection ('mat' -> None)           : {} ns/op (Total: {:?})", per_op_struct_ns, elapsed_struct);
-        println!("Struct Member Extraction ('mat' -> fields) : {} ns/op (Total: {:?})", per_op_members_ns, elapsed_members);
-        println!("Include Autocomplete Speed (End-to-End)    : {} µs/op (Total: {:?})", per_op_inc_comp_us, elapsed_inc_comp);
-        println!("Vector Swizzle Autocomplete (End-to-End)   : {} µs/op (Total: {:?})", per_op_swizzle_comp_us, elapsed_swizzle_comp);
-        #[cfg(windows)]
-        {
-            println!("Process Private Bytes (Real Heap/RAM)      : {:.2} MB ({} KB)", priv_mem as f64 / (1024.0 * 1024.0), priv_mem / 1024);
-            println!("Process Working Set (RAM + OS Mappings)    : {:.2} MB ({} KB)", ws as f64 / (1024.0 * 1024.0), ws / 1024);
-        }
-        println!("========================================================\n");
-    }
-}
 
