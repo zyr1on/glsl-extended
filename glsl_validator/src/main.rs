@@ -4212,11 +4212,58 @@ void main() {
         let elapsed_members = start.elapsed();
         let per_op_members_ns = elapsed_members.as_nanos() / iters as u128;
 
+        // 4. Benchmark full autocomplete with #include (End-to-End handle_completion)
+        let common_uri = "file:///project/shaders/common.glsl";
+        let common_code = "void calculateLighting() {}\nvec4 lightColor = vec4(1.0);\n";
+        doc_cache.insert(common_uri.to_string(), common_code.to_string());
+
+        let inc_shader_uri = "file:///project/shaders/scene.frag";
+        let inc_shader_code = "#include \"common.glsl\"\nvoid main() {\n    calc\n}";
+        doc_cache.insert(inc_shader_uri.to_string(), inc_shader_code.to_string());
+
+        let req_include = json!({
+            "params": {
+                "textDocument": { "uri": inc_shader_uri },
+                "position": { "line": 2, "character": 8 }
+            }
+        });
+
+        let iters_lsp = 5_000;
+        let start = std::time::Instant::now();
+        for _ in 0..iters_lsp {
+            let res = handle_completion(&req_include, &doc_cache);
+            assert!(res.as_array().is_some_and(|a| !a.is_empty()));
+        }
+        let elapsed_inc_comp = start.elapsed();
+        let per_op_inc_comp_us = elapsed_inc_comp.as_micros() / iters_lsp as u128;
+
+        // 5. Benchmark vector swizzle autocomplete (End-to-End handle_completion on 'color.')
+        let swizzle_shader_code = "void main() {\n    vec4 color = vec4(1.0);\n    color.xy\n}";
+        let swizzle_uri = "file:///project/shaders/swizzle.frag";
+        doc_cache.insert(swizzle_uri.to_string(), swizzle_shader_code.to_string());
+
+        let req_swizzle = json!({
+            "params": {
+                "textDocument": { "uri": swizzle_uri },
+                "position": { "line": 2, "character": 12 }
+            }
+        });
+
+        let start = std::time::Instant::now();
+        for _ in 0..iters_lsp {
+            let res = handle_completion(&req_swizzle, &doc_cache);
+            assert!(res.as_array().is_some_and(|a| !a.is_empty()));
+        }
+        let elapsed_swizzle_comp = start.elapsed();
+        let per_op_swizzle_comp_us = elapsed_swizzle_comp.as_micros() / iters_lsp as u128;
+
         println!("\n=================== BENCHMARK REPORT ===================");
-        println!("Iterations per test: {}", iters);
+        println!("Iterations: 10,000 unit / 5,000 full end-to-end LSP requests");
         println!("Vector Dim Inference ('color' -> vec4)     : {} ns/op (Total: {:?})", per_op_vec_ns, elapsed_vec);
         println!("Struct Rejection ('mat' -> None)           : {} ns/op (Total: {:?})", per_op_struct_ns, elapsed_struct);
         println!("Struct Member Extraction ('mat' -> fields) : {} ns/op (Total: {:?})", per_op_members_ns, elapsed_members);
+        println!("Include Autocomplete Speed (End-to-End)    : {} µs/op (Total: {:?})", per_op_inc_comp_us, elapsed_inc_comp);
+        println!("Vector Swizzle Autocomplete (End-to-End)   : {} µs/op (Total: {:?})", per_op_swizzle_comp_us, elapsed_swizzle_comp);
         println!("========================================================\n");
     }
 }
