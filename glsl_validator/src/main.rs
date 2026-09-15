@@ -2866,6 +2866,12 @@ fn main() -> io::Result<()> {
             None => continue,
         };
 
+        // Safety cap: prevent runaway allocation on corrupt Content-Length headers (>32MB)
+        if len > 32 * 1024 * 1024 {
+            log(&format!("Rejected excessively large payload: {len} bytes"));
+            continue;
+        }
+
         body_buf.resize(len, 0);
         stdin_lock.read_exact(&mut body_buf)?;
 
@@ -4257,6 +4263,37 @@ void main() {
         let elapsed_swizzle_comp = start.elapsed();
         let per_op_swizzle_comp_us = elapsed_swizzle_comp.as_micros() / iters_lsp as u128;
 
+        #[cfg(windows)]
+        let (ws, priv_mem) = {
+            use std::mem::zeroed;
+            #[repr(C)]
+            struct ProcessMemoryCounters {
+                cb: u32,
+                page_fault_count: u32,
+                peak_working_set_size: usize,
+                working_set_size: usize,
+                quota_peak_paged_pool_usage: usize,
+                quota_paged_pool_usage: usize,
+                quota_peak_non_paged_pool_usage: usize,
+                quota_non_paged_pool_usage: usize,
+                pagefile_usage: usize,
+                peak_pagefile_usage: usize,
+            }
+            extern "system" {
+                fn GetCurrentProcess() -> isize;
+                fn K32GetProcessMemoryInfo(process: isize, counters: *mut ProcessMemoryCounters, cb: u32) -> i32;
+            }
+            unsafe {
+                let mut counters: ProcessMemoryCounters = zeroed();
+                counters.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+                if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 {
+                    (counters.working_set_size, counters.pagefile_usage)
+                } else {
+                    (0, 0)
+                }
+            }
+        };
+
         println!("\n=================== BENCHMARK REPORT ===================");
         println!("Iterations: 10,000 unit / 5,000 full end-to-end LSP requests");
         println!("Vector Dim Inference ('color' -> vec4)     : {} ns/op (Total: {:?})", per_op_vec_ns, elapsed_vec);
@@ -4264,6 +4301,11 @@ void main() {
         println!("Struct Member Extraction ('mat' -> fields) : {} ns/op (Total: {:?})", per_op_members_ns, elapsed_members);
         println!("Include Autocomplete Speed (End-to-End)    : {} µs/op (Total: {:?})", per_op_inc_comp_us, elapsed_inc_comp);
         println!("Vector Swizzle Autocomplete (End-to-End)   : {} µs/op (Total: {:?})", per_op_swizzle_comp_us, elapsed_swizzle_comp);
+        #[cfg(windows)]
+        {
+            println!("Process Private Bytes (Real Heap/RAM)      : {:.2} MB ({} KB)", priv_mem as f64 / (1024.0 * 1024.0), priv_mem / 1024);
+            println!("Process Working Set (RAM + OS Mappings)    : {:.2} MB ({} KB)", ws as f64 / (1024.0 * 1024.0), ws / 1024);
+        }
         println!("========================================================\n");
     }
 }

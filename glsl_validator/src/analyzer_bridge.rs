@@ -74,6 +74,11 @@ impl AnalyzerBridge {
                     None => continue,
                 };
 
+                // Safety cap: prevent runaway allocation on corrupt Content-Length headers (>32MB)
+                if len > 32 * 1024 * 1024 {
+                    continue;
+                }
+
                 body.resize(len, 0);
                 if reader.read_exact(&mut body).is_err() {
                     is_alive_reader.store(false, Ordering::Relaxed);
