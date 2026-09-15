@@ -46,6 +46,7 @@ impl AnalyzerBridge {
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
+            let mut body = Vec::new();
             loop {
                 let mut content_length: Option<usize> = None;
                 loop {
@@ -61,9 +62,8 @@ impl AnalyzerBridge {
                     if trimmed.is_empty() {
                         break;
                     }
-                    let lower = trimmed.to_lowercase();
-                    if let Some(val) = lower.strip_prefix("content-length:") {
-                        if let Ok(len) = val.trim().parse::<usize>() {
+                    if trimmed.len() >= 15 && trimmed[..15].eq_ignore_ascii_case("content-length:") {
+                        if let Ok(len) = trimmed[15..].trim().parse::<usize>() {
                             content_length = Some(len);
                         }
                     }
@@ -74,7 +74,7 @@ impl AnalyzerBridge {
                     None => continue,
                 };
 
-                let mut body = vec![0u8; len];
+                body.resize(len, 0);
                 if reader.read_exact(&mut body).is_err() {
                     is_alive_reader.store(false, Ordering::Relaxed);
                     return;

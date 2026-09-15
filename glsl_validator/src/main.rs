@@ -612,26 +612,26 @@ pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(file_path) = uri_to_path(uri) {
         if let Some(parent) = file_path.parent() {
-            if parent.exists() {
+            if parent.is_dir() {
                 dirs.push(parent.to_path_buf());
                 let inc = parent.join("include");
-                if inc.exists() && inc.is_dir() {
+                if inc.is_dir() {
                     dirs.push(inc);
                 }
                 let shaders = parent.join("shaders");
-                if shaders.exists() && shaders.is_dir() {
+                if shaders.is_dir() {
                     dirs.push(shaders);
                 }
             }
             if let Some(grandparent) = parent.parent() {
-                if grandparent.exists() {
+                if grandparent.is_dir() {
                     dirs.push(grandparent.to_path_buf());
                     let inc = grandparent.join("include");
-                    if inc.exists() && inc.is_dir() && !dirs.contains(&inc) {
+                    if inc.is_dir() && !dirs.contains(&inc) {
                         dirs.push(inc);
                     }
                     let shaders = grandparent.join("shaders");
-                    if shaders.exists() && shaders.is_dir() && !dirs.contains(&shaders) {
+                    if shaders.is_dir() && !dirs.contains(&shaders) {
                         dirs.push(shaders);
                     }
                 }
@@ -1577,42 +1577,40 @@ pub fn generate_snippet_completions(query: &str) -> Vec<Value> {
         .collect()
 }
 
+#[inline]
+pub fn get_safe_char_boundary(line: &str, col: usize) -> usize {
+    let max = col.min(line.len());
+    if line.is_char_boundary(max) {
+        max
+    } else {
+        (0..=max).rev().find(|&i| line.is_char_boundary(i)).unwrap_or(0)
+    }
+}
+
+fn extract_dot_expression(s: &str) -> &str {
+    let mut start = s.len();
+    for (i, c) in s.char_indices().rev() {
+        if c.is_alphanumeric() || c == '_' || c == '.' {
+            start = i;
+        } else {
+            break;
+        }
+    }
+    &s[start..]
+}
+
 pub fn detect_dot_access(prefix: &str) -> (bool, &str, &str, usize) {
     let trimmed = prefix.trim_end();
     if let Some(stripped) = trimmed.strip_suffix('.') {
         let before_dot = stripped.trim_end();
-        let mut start = before_dot.len();
-        for (i, c) in before_dot.char_indices().rev() {
-            if c.is_alphanumeric() || c == '_' || c == '.' {
-                start = i;
-            } else {
-                break;
-            }
-        }
-        let expr = &before_dot[start..];
+        let expr = extract_dot_expression(before_dot);
         (true, expr, "", stripped.len())
     } else {
-        let mut w_start = prefix.len();
-        for (i, c) in prefix.char_indices().rev() {
-            if c.is_alphanumeric() || c == '_' {
-                w_start = i;
-            } else {
-                break;
-            }
-        }
-        let w = &prefix[w_start..];
+        let (w_start, w) = extract_word_prefix(prefix);
         let before_word = prefix[..w_start].trim_end();
         if let Some(stripped) = before_word.strip_suffix('.') {
             let before_dot = stripped.trim_end();
-            let mut start = before_dot.len();
-            for (i, c) in before_dot.char_indices().rev() {
-                if c.is_alphanumeric() || c == '_' || c == '.' {
-                    start = i;
-                } else {
-                    break;
-                }
-            }
-            let expr = &before_dot[start..];
+            let expr = extract_dot_expression(before_dot);
             (true, expr, w, stripped.len())
         } else {
             (false, "", "", 0)
@@ -1645,117 +1643,69 @@ pub fn check_following_paren(line: &str, safe_col: usize) -> (usize, bool) {
     (word_end, has_paren)
 }
 
-pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
-    let params = match msg.get("params") {
-        Some(p) => p,
-        None => return json!([]),
-    };
-
-    let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
-    let line_idx = params["position"]["line"].as_u64().unwrap_or(0) as usize;
-    let col_idx = params["position"]["character"].as_u64().unwrap_or(0) as usize;
-
-    let doc = match doc_cache.get(uri) {
-        Some(d) => d,
-        None => return json!([]),
-    };
-
-    if signature::is_in_comment_or_string(doc, line_idx, col_idx) {
-        return json!([]);
+fn push_swizzle_completions(
+    items: &mut Vec<Value>,
+    seen_labels: &mut HashSet<String>,
+    dim: usize,
+    member_word: &str,
+    swizzle_range: &Value,
+) {
+    let mut swizzles = generate_swizzle_completions(dim);
+    if !member_word.is_empty() {
+        swizzles.retain(|s| {
+            s["label"]
+                .as_str()
+                .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
+        });
     }
-
-    let line = match doc.lines().nth(line_idx) {
-        Some(l) => l,
-        None => return json!([]),
-    };
-
-    let safe_col = {
-        let max_col = col_idx.min(line.len());
-        if line.is_char_boundary(max_col) {
-            max_col
-        } else {
-            (0..=max_col)
-                .rev()
-                .find(|&i| line.is_char_boundary(i))
-                .unwrap_or(0)
-        }
-    };
-    let prefix = &line[..safe_col];
-
-    // Single-pass include scanning for functions and variables (ultra-fast)
-    let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
-
-    // Detect if cursor is after a dot (e.g. `testColor.` or `testColor.x`)
-    let (is_dot_access, expr_before_dot, member_word, dot_col) = detect_dot_access(prefix);
-
-    if is_dot_access && !expr_before_dot.is_empty() {
-        if let Some(dim) = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot) {
-            log(&format!(
-                "Swizzle completion triggered for expr='{expr_before_dot}', member_filter='{member_word}' at line={line_idx}, col={col_idx}"
-            ));
-
-            let mut swizzles = generate_swizzle_completions(dim);
-            if !member_word.is_empty() {
-                swizzles.retain(|s| {
-                    s["label"]
-                        .as_str()
-                        .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
-                });
+    for mut item in swizzles {
+        if let Some(obj) = item.as_object_mut() {
+            let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
+            if seen_labels.insert(label.clone()) {
+                obj.insert("textEdit".to_string(), json!({
+                    "range": swizzle_range,
+                    "newText": label
+                }));
+                items.push(item);
             }
-            let swizzle_range = json!({
-                "start": { "line": line_idx, "character": dot_col + 1 },
-                "end": { "line": line_idx, "character": safe_col }
-            });
-            for item in &mut swizzles {
-                if let Some(obj) = item.as_object_mut() {
-                    let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
-                    obj.insert("textEdit".to_string(), json!({
-                        "range": swizzle_range,
-                        "newText": label
-                    }));
-                }
-            }
-            return json!(swizzles);
-        } else {
-            let members = extract_struct_members(&user_vars, doc, doc_cache, expr_before_dot);
-            let mut items = Vec::new();
-            let member_range = json!({
-                "start": { "line": line_idx, "character": dot_col + 1 },
-                "end": { "line": line_idx, "character": safe_col }
-            });
-            for (field_name, field_type) in members {
-                if member_word.is_empty() || starts_with_ignore_ascii_case(&field_name, member_word) {
-                    items.push(json!({
-                        "label": field_name,
-                        "kind": 5, // Field
-                        "detail": field_type,
-                        "insertText": field_name,
-                        "insertTextFormat": 1,
-                        "textEdit": {
-                            "range": member_range,
-                            "newText": field_name
-                        },
-                        "sortText": format!("00_{}", field_name)
-                    }));
-                }
-            }
-            return json!(items);
         }
     }
+}
 
-    // Extract word under/before cursor
-    let (word_start, word) = extract_word_prefix(prefix);
-    let (word_end, following_has_paren) = check_following_paren(line, safe_col);
+fn push_struct_member_completions(
+    items: &mut Vec<Value>,
+    seen_labels: &mut HashSet<String>,
+    members: Vec<(String, String)>,
+    member_word: &str,
+    member_range: &Value,
+) {
+    for (field_name, field_type) in members {
+        if (member_word.is_empty() || starts_with_ignore_ascii_case(&field_name, member_word))
+            && seen_labels.insert(field_name.clone())
+        {
+            items.push(json!({
+                "label": field_name,
+                "kind": 5, // Field
+                "detail": field_type,
+                "insertText": field_name,
+                "insertTextFormat": 1,
+                "textEdit": {
+                    "range": member_range,
+                    "newText": field_name
+                },
+                "sortText": format!("00_{}", field_name)
+            }));
+        }
+    }
+}
 
-    let replace_range = json!({
-        "start": { "line": line_idx, "character": word_start },
-        "end": { "line": line_idx, "character": word_end }
-    });
-
-    let mut items = Vec::new();
-    let mut seen_labels = HashSet::new();
-
-    // 1. User variables & symbols from current file and recursively included files (#include)
+fn push_user_var_completions(
+    items: &mut Vec<Value>,
+    seen_labels: &mut HashSet<String>,
+    user_vars: Vec<signature::VariableSymbol>,
+    word: &str,
+    replace_range: &Value,
+) {
     for var in user_vars {
         if (word.is_empty() || starts_with_ignore_ascii_case(&var.name, word))
             && seen_labels.insert(var.name.clone())
@@ -1792,8 +1742,16 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
             }));
         }
     }
+}
 
-    // 2. User functions from current file and recursively included files (#include)
+fn push_user_func_completions(
+    items: &mut Vec<Value>,
+    seen_labels: &mut HashSet<String>,
+    user_funcs: Vec<signature::FunctionSignature>,
+    word: &str,
+    following_has_paren: bool,
+    replace_range: &Value,
+) {
     for func in user_funcs {
         if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
             && seen_labels.insert(func.name.clone())
@@ -1832,6 +1790,72 @@ pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Va
             }));
         }
     }
+}
+
+pub fn handle_completion(msg: &Value, doc_cache: &HashMap<String, String>) -> Value {
+    let params = match msg.get("params") {
+        Some(p) => p,
+        None => return json!([]),
+    };
+
+    let uri = params["textDocument"]["uri"].as_str().unwrap_or("");
+    let line_idx = params["position"]["line"].as_u64().unwrap_or(0) as usize;
+    let col_idx = params["position"]["character"].as_u64().unwrap_or(0) as usize;
+
+    let doc = match doc_cache.get(uri) {
+        Some(d) => d,
+        None => return json!([]),
+    };
+
+    if signature::is_in_comment_or_string(doc, line_idx, col_idx) {
+        return json!([]);
+    }
+
+    let line = match doc.lines().nth(line_idx) {
+        Some(l) => l,
+        None => return json!([]),
+    };
+
+    let safe_col = get_safe_char_boundary(line, col_idx);
+    let prefix = &line[..safe_col];
+
+    // Single-pass include scanning for functions and variables (ultra-fast)
+    let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
+
+    // Detect if cursor is after a dot (e.g. `testColor.` or `testColor.x`)
+    let (is_dot_access, expr_before_dot, member_word, dot_col) = detect_dot_access(prefix);
+
+    let mut items = Vec::new();
+    let mut seen_labels = HashSet::new();
+
+    if is_dot_access && !expr_before_dot.is_empty() {
+        let member_range = json!({
+            "start": { "line": line_idx, "character": dot_col + 1 },
+            "end": { "line": line_idx, "character": safe_col }
+        });
+        if let Some(dim) = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot) {
+            push_swizzle_completions(&mut items, &mut seen_labels, dim, member_word, &member_range);
+        } else {
+            let members = extract_struct_members(&user_vars, doc, doc_cache, expr_before_dot);
+            push_struct_member_completions(&mut items, &mut seen_labels, members, member_word, &member_range);
+        }
+        return json!(items);
+    }
+
+    // Extract word under/before cursor
+    let (word_start, word) = extract_word_prefix(prefix);
+    let (word_end, following_has_paren) = check_following_paren(line, safe_col);
+
+    let replace_range = json!({
+        "start": { "line": line_idx, "character": word_start },
+        "end": { "line": line_idx, "character": word_end }
+    });
+
+    // 1. User variables & symbols from current file and recursively included files (#include)
+    push_user_var_completions(&mut items, &mut seen_labels, user_vars, word, &replace_range);
+
+    // 2. User functions from current file and recursively included files (#include)
+    push_user_func_completions(&mut items, &mut seen_labels, user_funcs, word, following_has_paren, &replace_range);
 
     // 3. GLSL Builtin Types & Constructors (e.g. vec2, vec3, vec4, mat4, float, sampler2D)
     for b_type in docs::get_all_types() {
@@ -2060,17 +2084,7 @@ pub fn enhance_analyzer_completions(
         None => return json!(raw_items),
     };
 
-    let safe_col = {
-        let max_col = col_idx.min(line.len());
-        if line.is_char_boundary(max_col) {
-            max_col
-        } else {
-            (0..=max_col)
-                .rev()
-                .find(|&i| line.is_char_boundary(i))
-                .unwrap_or(0)
-        }
-    };
+    let safe_col = get_safe_char_boundary(line, col_idx);
     let prefix = &line[..safe_col];
 
     // Check if following character is '('
@@ -2087,67 +2101,25 @@ pub fn enhance_analyzer_completions(
 
     // 1. If dot access, prepend swizzles (for vectors) or struct members (for structs)
     let is_vector = if is_dot_access && !expr_before_dot.is_empty() {
+        let member_range = json!({
+            "start": { "line": line_idx, "character": dot_col + 1 },
+            "end": { "line": line_idx, "character": safe_col }
+        });
         let user_vars = if doc.contains("#include") {
             signature::resolve_includes_and_scan_variables(uri, doc, doc_cache)
         } else {
             signature::scan_user_variables(doc, None, Some(uri))
         };
         if let Some(dim) = infer_vector_dimension_from_vars(&user_vars, doc, expr_before_dot) {
-            let mut swizzles = generate_swizzle_completions(dim);
-            if !member_word.is_empty() {
-                swizzles.retain(|s| {
-                    s["label"]
-                        .as_str()
-                        .is_some_and(|l| starts_with_ignore_ascii_case(l, member_word))
-                });
-            }
-            let swizzle_range = json!({
-                "start": { "line": line_idx, "character": dot_col + 1 },
-                "end": { "line": line_idx, "character": safe_col }
-            });
-            for item in &mut swizzles {
-                if let Some(obj) = item.as_object_mut() {
-                    let label = obj.get("label").and_then(|l| l.as_str()).unwrap_or("").to_string();
-                    if seen_labels.insert(label.clone()) {
-                        obj.insert("textEdit".to_string(), json!({
-                            "range": swizzle_range,
-                            "newText": label
-                        }));
-                        out_items.push(Value::Object(obj.clone()));
-                    }
-                }
-            }
+            push_swizzle_completions(&mut out_items, &mut seen_labels, dim, member_word, &member_range);
             true
         } else {
-            // Struct members (from user code or #includes)
             let members = extract_struct_members(&user_vars, doc, doc_cache, expr_before_dot);
-            let member_range = json!({
-                "start": { "line": line_idx, "character": dot_col + 1 },
-                "end": { "line": line_idx, "character": safe_col }
-            });
-            for (field_name, field_type) in members {
-                if (member_word.is_empty() || starts_with_ignore_ascii_case(&field_name, member_word))
-                    && seen_labels.insert(field_name.clone())
-                {
-                    out_items.push(json!({
-                        "label": field_name,
-                        "kind": 5, // Field
-                        "detail": field_type,
-                        "insertText": field_name,
-                        "insertTextFormat": 1,
-                        "textEdit": {
-                            "range": member_range,
-                            "newText": field_name
-                        },
-                        "sortText": format!("00_{}", field_name)
-                    }));
-                }
-            }
+            push_struct_member_completions(&mut out_items, &mut seen_labels, members, member_word, &member_range);
             false
         }
     } else {
         if !is_dot_access {
-            // Normal identifier completion: Inject user variables and functions (from current doc and recursively included #include files)
             let replace_range = json!({
                 "start": { "line": line_idx, "character": word_start },
                 "end": { "line": line_idx, "character": word_end }
@@ -2155,83 +2127,11 @@ pub fn enhance_analyzer_completions(
 
             let (user_funcs, user_vars) = signature::resolve_includes_and_scan_symbols(uri, doc, doc_cache);
 
-            // 1. User variables & symbols (constants, structs, uniforms, etc.)
-            for var in user_vars {
-                if (word.is_empty() || starts_with_ignore_ascii_case(&var.name, word))
-                    && seen_labels.insert(var.name.clone())
-                {
-                    let kind = match var.qualifier.as_str() {
-                        "struct" => 22,            // Struct
-                        "const" | "#define" => 21, // Constant
-                        _ => 6,                    // Variable
-                    };
+            // 1. User variables
+            push_user_var_completions(&mut out_items, &mut seen_labels, user_vars, word, &replace_range);
 
-                    let detail = format!("{} {}", var.qualifier, var.var_type);
-                    let doc_text = match (&var.source, &var.doc) {
-                        (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
-                        (Some(src), None) => format!("*Defined in `{src}`*"),
-                        (None, Some(d)) => d.clone(),
-                        (None, None) => String::new(),
-                    };
-
-                    out_items.push(json!({
-                        "label": var.name,
-                        "kind": kind,
-                        "detail": detail,
-                        "documentation": {
-                            "kind": "markdown",
-                            "value": doc_text,
-                        },
-                        "insertText": var.name,
-                        "insertTextFormat": 1,
-                        "textEdit": {
-                            "range": replace_range,
-                            "newText": var.name
-                        },
-                        "sortText": format!("00_{}", var.name),
-                    }));
-                }
-            }
-
-            // 2. User functions (from current doc & #includes)
-            for func in user_funcs {
-                if (word.is_empty() || starts_with_ignore_ascii_case(&func.name, word))
-                    && seen_labels.insert(func.name.clone())
-                {
-                    let detail = func.label.clone();
-                    let doc_text = match (&func.source, &func.doc) {
-                        (Some(src), Some(d)) => format!("*Defined in `{src}`*\n\n{d}"),
-                        (Some(src), None) => format!("*Defined in `{src}`*"),
-                        (None, Some(d)) => d.clone(),
-                        (None, None) => String::new(),
-                    };
-
-                    let (insert_text, insert_format) = if following_has_paren {
-                        (func.name.clone(), 1)
-                    } else if func.parameters.is_empty() {
-                        (format!("{}()$0", func.name), 2)
-                    } else {
-                        (format!("{}($1)$0", func.name), 2)
-                    };
-
-                    out_items.push(json!({
-                        "label": func.name,
-                        "kind": 3, // Function
-                        "detail": detail,
-                        "documentation": {
-                            "kind": "markdown",
-                            "value": doc_text,
-                        },
-                        "insertText": insert_text,
-                        "insertTextFormat": insert_format,
-                        "textEdit": {
-                            "range": replace_range,
-                            "newText": insert_text
-                        },
-                        "sortText": format!("01_{}", func.name),
-                    }));
-                }
-            }
+            // 2. User functions
+            push_user_func_completions(&mut out_items, &mut seen_labels, user_funcs, word, following_has_paren, &replace_range);
         }
         false
     };
@@ -2935,13 +2835,15 @@ fn main() -> io::Result<()> {
     let mut custom_analyzer_path: Option<String> = None;
     let mut custom_clang_path: Option<String> = None;
     let mut custom_default_version: Option<String> = None;
-    let mut analyzer_bridge: Option<Arc<AnalyzerBridge>> = None;
+    let mut analyzer_bridge: Option<AnalyzerBridge> = None;
+    let mut header_line = String::new();
+    let mut body_buf = Vec::new();
 
     loop {
         let mut content_length: Option<usize> = None;
 
         loop {
-            let mut header_line = String::new();
+            header_line.clear();
             if stdin_lock.read_line(&mut header_line)? == 0 {
                 log("EOF reached on stdin, exiting.");
                 return Ok(());
@@ -2952,9 +2854,8 @@ fn main() -> io::Result<()> {
                 break;
             }
 
-            let lower = trimmed.to_lowercase();
-            if let Some(val) = lower.strip_prefix("content-length:") {
-                if let Ok(len) = val.trim().parse::<usize>() {
+            if trimmed.len() >= 15 && trimmed[..15].eq_ignore_ascii_case("content-length:") {
+                if let Ok(len) = trimmed[15..].trim().parse::<usize>() {
                     content_length = Some(len);
                 }
             }
@@ -2965,7 +2866,7 @@ fn main() -> io::Result<()> {
             None => continue,
         };
 
-        let mut body_buf = vec![0u8; len];
+        body_buf.resize(len, 0);
         stdin_lock.read_exact(&mut body_buf)?;
 
         let msg: Value = match serde_json::from_slice(&body_buf) {
@@ -3032,7 +2933,7 @@ fn main() -> io::Result<()> {
                         if let Some(bridge) = AnalyzerBridge::start(path) {
                             let _ = bridge.send_request("initialize", msg["params"].clone(), std::time::Duration::from_secs(3));
                             bridge.send_notification("initialized", json!({}));
-                            analyzer_bridge = Some(Arc::new(bridge));
+                            analyzer_bridge = Some(bridge);
                         }
                     } else {
                         log("glsl_analyzer binary not detected, using built-in language engine.");
@@ -3329,7 +3230,7 @@ fn main() -> io::Result<()> {
                                 });
                                 let _ = bridge.send_request("initialize", init_params, std::time::Duration::from_secs(3));
                                 bridge.send_notification("initialized", json!({}));
-                                analyzer_bridge = Some(Arc::new(bridge));
+                                analyzer_bridge = Some(bridge);
                             }
                         }
                     }
