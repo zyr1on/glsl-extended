@@ -166,6 +166,79 @@ void main() {
 
 ---
 
+## 💻 Using `glsl_validator` with Other Editors (Neovim, Helix, Sublime Text)
+
+The core language server (`glsl_validator`) is distributed as a standalone native binary and can be used with any editor that supports the Language Server Protocol (LSP).
+
+### Prerequisites
+1. **Download `glsl_validator`:** Download the pre-built native binary for your OS (Windows, Linux, macOS) from [Latest Releases](https://github.com/zyr1on/glsl-extended/releases) and place it in your system `PATH`.
+2. **Install `glslang`:** Ensure `glslangValidator` (or `glslang`) is available in your `PATH` (e.g., via Vulkan SDK, `apt install glslang-tools`, `pacman -S glslang`, or `brew install glslang`).
+3. *(Optional)* **`glsl_analyzer`**: If you wish to route semantic analysis to `glsl_analyzer`, ensure it is installed in your `PATH`.
+
+### Neovim (`nvim-lspconfig`)
+
+Add `glsl_validator` to your Neovim configuration:
+
+```lua
+local lspconfig = require('lspconfig')
+local configs = require('lspconfig.configs')
+
+if not configs.glsl_validator then
+  configs.glsl_validator = {
+    default_config = {
+      cmd = { 'glsl_validator' },
+      filetypes = { 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'rgen', 'rmiss', 'rchit' },
+      root_dir = lspconfig.util.root_pattern('.git', 'compile_flags.txt'),
+      init_options = {
+        target_api = 'opengl',          -- 'opengl' or 'vulkan'
+        formatter = 'clang-format',     -- 'clang-format' or 'builtin'
+        -- glslang_validator_path = '/custom/path/to/glslangValidator',
+      },
+    },
+  }
+end
+
+lspconfig.glsl_validator.setup({})
+```
+
+### Helix (`languages.toml`)
+
+In `~/.config/helix/languages.toml`:
+
+```toml
+[language-server.glsl_validator]
+command = "glsl_validator"
+config = { target_api = "opengl", formatter = "clang-format" }
+
+[[language]]
+name = "glsl"
+scope = "source.glsl"
+file-types = ["glsl", "vert", "frag", "geom", "comp", "tesc", "tese", "rgen", "rmiss", "rchit"]
+language-servers = [ "glsl_validator" ]
+```
+
+### Sublime Text (LSP Package)
+
+In `Preferences -> Package Settings -> LSP -> Settings`:
+
+```json
+{
+  "clients": {
+    "glsl_validator": {
+      "enabled": true,
+      "command": ["glsl_validator"],
+      "selector": "source.glsl",
+      "initializationOptions": {
+        "target_api": "opengl",
+        "formatter": "clang-format"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## 🛠️ Building from Source
 
 If you want to build and hack on GLSL Extended locally, you can easily compile all components from source:
