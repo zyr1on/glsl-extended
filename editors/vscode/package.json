@@ -1,0 +1,137 @@
+{
+  "name": "vscode-glsl-extended",
+  "displayName": "GLSL Extended",
+  "description": "High-performance GLSL Language Server and syntax support for OpenGL and Vulkan shaders.",
+  "version": "0.1.1",
+  "publisher": "zyr1on",
+  "author": {
+    "name": "Semih Ozdemir",
+    "email": "semihozdmirr@gmail.com"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zyr1on/zed-glsl-extended"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Snippets"
+  ],
+  "keywords": [
+    "glsl",
+    "opengl",
+    "vulkan",
+    "shader",
+    "glslang",
+    "lsp",
+    "language server"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:glsl"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "glsl",
+        "aliases": [
+          "GLSL",
+          "glsl",
+          "OpenGL Shading Language"
+        ],
+        "extensions": [
+          ".vert",
+          ".frag",
+          ".geom",
+          ".comp",
+          ".tesc",
+          ".tese",
+          ".mesh",
+          ".task",
+          ".rgen",
+          ".rint",
+          ".rahit",
+          ".rchit",
+          ".rmiss",
+          ".rcall",
+          ".glsl",
+          ".glslh"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "glsl",
+        "scopeName": "source.glsl",
+        "path": "./syntaxes/glsl.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "glsl",
+        "path": "./snippets/glsl.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "glsl-extended.restartServer",
+        "title": "GLSL Extended: Restart Language Server",
+        "category": "GLSL"
+      },
+      {
+        "command": "glsl-extended.downloadServer",
+        "title": "GLSL Extended: Download / Update Language Server Binary",
+        "category": "GLSL"
+      }
+    ],
+    "configuration": {
+      "title": "GLSL Extended",
+      "properties": {
+        "glslExtended.validatorPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to the glsl_validator executable. If empty, PATH or auto-download is used."
+        },
+        "glslExtended.glslangValidatorPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to Khronos glslangValidator. If empty, PATH, Vulkan SDK or auto-download is used."
+        },
+        "glslExtended.analyzerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional custom path to glsl_analyzer."
+        },
+        "glslExtended.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the GLSL language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

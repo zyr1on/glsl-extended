@@ -76,14 +76,14 @@ jobs:
 
       - name: Build extension.wasm
         run: |
-          cargo build --release --target wasm32-wasip2
+          cargo build --release --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
 
       - name: Package zed-glsl-general-release.zip
         run: |
           mkdir -p dist/package
           cp target/wasm32-wasip2/release/zed_glsl_extended.wasm dist/package/extension.wasm
-          cp extension.toml dist/package/
-          cp -r languages dist/package/
+          cp editors/zed/extension.toml dist/package/
+          cp -r editors/zed/languages dist/package/
           cd dist/package && zip -r ../../zed-glsl-general-release.zip .
 
       - name: Upload Zed Extension Release Asset
@@ -91,3 +91,27 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: zed-glsl-general-release.zip
+
+  build-vsix:
+    name: Build and Package VS Code Extension (.vsix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build and Package VSIX
+        run: |
+          cd editors/vscode
+          npm install
+          npm run compile
+          npx @vscode/vsce package --no-dependencies -o ../../vscode-glsl-extended.vsix
+
+      - name: Upload VS Code Extension Release Asset
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: vscode-glsl-extended.vsix

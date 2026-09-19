@@ -1,6 +1,6 @@
-# GLSL Extended for Zed
+# GLSL Extended (for Zed & VS Code)
 
-Comprehensive GLSL and shader development extension for the Zed Editor, featuring full support for Desktop OpenGL (from `#version 330 core` through `#version 460 core`) and Vulkan (SPIR-V) validation, AST-based formatting, smart vector swizzling, recursive `#include` autocompletion, signature help with docs.gl, and Tree-sitter syntax highlighting.
+Comprehensive GLSL and shader development extension for **Zed Editor** and **Visual Studio Code**, featuring full support for Desktop OpenGL (from `#version 330 core` through `#version 460 core`) and Vulkan (SPIR-V) validation, AST-based formatting, smart vector swizzling, recursive `#include` autocompletion, signature help with docs.gl, and syntax highlighting.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zed Extension API](https://img.shields.io/badge/Zed%20Extension%20API-v0.7.0-blue)](https://crates.io/crates/zed_extension_api)
@@ -13,12 +13,20 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 ---
 
 > [!TIP]
-> ### 📦 Quick Install without Rust (Install Dev Extension)
+> ### 📦 Quick Install: Zed Editor
 > 1. Download **`zed-glsl-general-release.zip`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases) and extract it anywhere on your computer.
 > 2. Open Zed and open the Extensions panel (`Ctrl+Shift+X` on Windows/Linux, `Cmd+Shift+X` on macOS).
 > 3. Click **"Install Dev Extension"** at the top right and select the extracted folder.
 > 
-> *Done! The extension will load immediately without requiring Rust, Cargo, or any compilation.*
+> *Done! The extension will load immediately without requiring Rust or Cargo.*
+
+> [!TIP]
+> ### 📦 Quick Install: Visual Studio Code
+> 1. Download **`vscode-glsl-extended.vsix`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> 2. In VS Code, open Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`), click the **`...`** (Views and More Actions) menu at the top of the Extensions panel, and select **"Install from VSIX..."**.
+> 3. Select the downloaded `vscode-glsl-extended.vsix` file.
+> 
+> *Done! VS Code will automatically download the language server binary in the background upon opening a shader.*
 
 > [!TIP]
 > ### Automatic Installation (Zero Setup)

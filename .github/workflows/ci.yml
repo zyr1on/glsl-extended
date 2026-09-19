@@ -20,10 +20,24 @@ jobs:
           components: clippy
 
       - name: Cargo Check WASM
-        run: cargo check --target wasm32-wasip2
+        run: cargo check --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
 
       - name: Clippy WASM
-        run: cargo clippy --target wasm32-wasip2 -- -D warnings
+        run: cargo clippy --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml -- -D warnings
+
+  check-vscode:
+    name: Check VS Code Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Compile VS Code Extension
+        run: |
+          cd editors/vscode
+          npm install
+          npm run compile
 
   test-validator:
     name: Test glsl_validator (${{ matrix.os }})

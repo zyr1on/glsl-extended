@@ -1,0 +1,139 @@
+{
+  "Uniform Buffer Object": {
+    "prefix": "ubo",
+    "body": [
+      "layout(std140, binding = ${1:0}) uniform ${2:BlockName} {",
+      "\t$0",
+      "};"
+    ],
+    "description": "Generic Uniform Buffer Object (UBO)"
+  },
+  "Uniform Buffer Object (Vulkan)": {
+    "prefix": "ubo-vk",
+    "body": [
+      "layout(set = ${1:0}, binding = ${2:0}) uniform ${3:BlockName} {",
+      "\t$0",
+      "} ${4:ubo};"
+    ],
+    "description": "Vulkan Uniform Buffer Object with set and binding"
+  },
+  "Shader Storage Buffer Object": {
+    "prefix": "ssbo",
+    "body": [
+      "layout(std430, binding = ${1:0}) buffer ${2:BlockName} {",
+      "\t$0",
+      "};"
+    ],
+    "description": "Generic Shader Storage Buffer Object (SSBO)"
+  },
+  "Vertex Shader (Vulkan)": {
+    "prefix": "vert-vk",
+    "body": [
+      "#version 460",
+      "",
+      "layout(location = 0) in vec3 inPosition;",
+      "",
+      "void main() {",
+      "\tgl_Position = vec4(inPosition, 1.0);",
+      "}"
+    ],
+    "description": "Clean Vulkan GLSL Vertex Shader boilerplate"
+  },
+  "Fragment Shader (Vulkan)": {
+    "prefix": "frag-vk",
+    "body": [
+      "#version 460",
+      "",
+      "layout(location = 0) out vec4 fragColor;",
+      "",
+      "void main() {",
+      "\tfragColor = vec4(1.0);",
+      "}"
+    ],
+    "description": "Clean Vulkan GLSL Fragment Shader boilerplate"
+  },
+  "Vertex Shader": {
+    "prefix": "vert",
+    "body": [
+      "#version 460 core",
+      "",
+      "layout(location = 0) in vec3 inPosition;",
+      "",
+      "void main() {",
+      "\tgl_Position = vec4(inPosition, 1.0);",
+      "}"
+    ],
+    "description": "Clean GLSL Vertex Shader boilerplate"
+  },
+  "Fragment Shader": {
+    "prefix": "frag",
+    "body": [
+      "#version 460 core",
+      "",
+      "layout(location = 0) out vec4 fragColor;",
+      "",
+      "void main() {",
+      "\tfragColor = vec4(1.0);",
+      "}"
+    ],
+    "description": "Clean GLSL Fragment Shader boilerplate"
+  },
+  "Compute Shader": {
+    "prefix": "comp",
+    "body": [
+      "#version 460 core",
+      "",
+      "layout(local_size_x = ${1:16}, local_size_y = ${2:16}, local_size_z = ${3:1}) in;",
+      "",
+      "void main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Clean GLSL Compute Shader boilerplate"
+  },
+  "Geometry Shader": {
+    "prefix": "geom",
+    "body": [
+      "#version 460 core",
+      "",
+      "layout(${1:triangles}) in;",
+      "layout(${2:triangle_strip}, max_vertices = ${3:3}) out;",
+      "",
+      "void main() {",
+      "\tfor (int i = 0; i < gl_in.length(); i++) {",
+      "\t\tgl_Position = gl_in[i].gl_Position;",
+      "\t\tEmitVertex();",
+      "\t}",
+      "\tEndPrimitive();",
+      "}"
+    ],
+    "description": "Clean GLSL Geometry Shader boilerplate"
+  },
+  "Struct Definition": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t$0",
+      "};"
+    ],
+    "description": "GLSL Struct definition"
+  },
+  "Function Definition": {
+    "prefix": "func",
+    "body": [
+      "${1:void} ${2:funcName}(${3}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "GLSL Function definition"
+  },
+  "Main Function": {
+    "prefix": "main",
+    "body": [
+      "void main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "GLSL void main() function"
+  }
+}

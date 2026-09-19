@@ -23,3 +23,10 @@ grammars/
 *.spv
 .DS_Store
 Thumbs.db
+
+# VS Code extension build outputs
+node_modules/
+**/node_modules/
+out/
+**/out/
+*.vsix
