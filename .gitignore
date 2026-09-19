@@ -1,6 +1,7 @@
 # Target directories
 /target/
 glsl_validator/target/
+dist/
 
 # WASM build outputs
 *.wasm

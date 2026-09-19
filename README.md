@@ -13,6 +13,16 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 ---
 
 > [!TIP]
+> ### 📦 Quick Install without Rust (Pre-compiled `.wasm`)
+> If you do not have Rust installed on your system, you can install the extension in seconds:
+> 1. Download **`zed-glsl-extended.zip`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> 2. Extract the contents into your Zed extensions directory:
+>    - **Windows:** `%LOCALAPPDATA%\Zed\extensions\installed\glsl-extended\`
+>    - **macOS:** `~/Library/Application Support/Zed/extensions/installed/glsl-extended/`
+>    - **Linux:** `~/.local/share/zed/extensions/installed/glsl-extended/`
+> 3. Restart Zed! The extension will load immediately and automatically manage compiler binaries in the background.
+
+> [!TIP]
 > ### Automatic Installation (Zero Setup)
 > **Everything is automatic!** GLSL Extended automatically resolves, downloads, and configures the required binaries from official GitHub releases when you open a shader:
 > - **`glsl_validator`**: Automatically downloaded from [zed-glsl-extended/releases](https://github.com/zyr1on/zed-glsl-extended/releases).

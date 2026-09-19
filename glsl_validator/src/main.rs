@@ -30,14 +30,16 @@ pub fn create_command<S: AsRef<std::ffi::OsStr>>(prog: S) -> Command {
 
 fn get_log_path() -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push("glsl_validator.log");
+    p.push("glsl_language_server.log");
     p
 }
 
 fn log(msg: &str) {
     static LOG_ENABLED: OnceLock<bool> = OnceLock::new();
     let enabled = *LOG_ENABLED.get_or_init(|| {
-        std::env::var("GLSL_VALIDATOR_LOG").is_ok() || std::env::var("GLSL_DEBUG").is_ok()
+        std::env::var("GLSL_LSP_LOG").is_ok()
+            || std::env::var("GLSL_VALIDATOR_LOG").is_ok()
+            || std::env::var("GLSL_DEBUG").is_ok()
     });
     if !enabled {
         return;
@@ -525,18 +527,27 @@ pub fn percent_decode_str(input: &str) -> String {
 
 pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let stripped = uri.strip_prefix("file://")?;
-    let path_str = if cfg!(windows) {
-        if stripped.starts_with('/') && stripped.chars().nth(2) == Some(':') {
-            &stripped[1..]
-        } else {
-            stripped
-        }
-    } else {
-        stripped
-    };
+    let decoded = percent_decode_str(stripped);
+    let mut s = decoded.as_str();
 
-    let decoded = percent_decode_str(path_str);
-    Some(PathBuf::from(decoded))
+    if cfg!(windows) {
+        while s.starts_with('/') || s.starts_with('\\') {
+            let rest = &s[1..];
+            if rest.len() >= 2
+                && rest.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                && rest.chars().nth(1) == Some(':')
+            {
+                s = rest;
+                break;
+            } else if s.starts_with("//") || s.starts_with("\\\\") {
+                s = &s[1..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    Some(PathBuf::from(s))
 }
 
 pub fn path_to_uri(path: &Path) -> String {
@@ -552,13 +563,13 @@ pub fn get_include_dirs(uri: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(file_path) = uri_to_path(uri) {
         let mut cur = file_path.parent();
-        for _ in 0..2 {
+        for _ in 0..4 {
             if let Some(dir) = cur {
                 if dir.is_dir() {
                     if !dirs.contains(&dir.to_path_buf()) {
                         dirs.push(dir.to_path_buf());
                     }
-                    for sub in ["include", "shaders"] {
+                    for sub in ["include", "includes", "shaders", "core", "common", "shared", "inc"] {
                         let sub_dir = dir.join(sub);
                         if sub_dir.is_dir() && !dirs.contains(&sub_dir) {
                             dirs.push(sub_dir);
@@ -785,6 +796,7 @@ fn validate_shader(
     };
 
     let inc_dirs = get_include_dirs(uri);
+    let file_dir = uri_to_path(uri).and_then(|p| p.parent().map(|d| d.to_path_buf()));
     log(&format!(
         "Validating uri='{uri}', stage='{stage}', target='{:?}' (flag='{}'), compiler='{compiler}', includes={}",
         target,
@@ -807,6 +819,9 @@ fn validate_shader(
                 "Preprocessing '#include' directives for OpenGL target using '{compiler}'"
             ));
             let mut prep_cmd = create_command(&compiler);
+            if let Some(ref dir) = file_dir {
+                prep_cmd.current_dir(dir);
+            }
             prep_cmd.args(["--stdin", "-E", "-S", stage]);
             for inc in &inc_dirs {
                 prep_cmd.arg(format!("-I{}", inc.display()));
@@ -843,6 +858,9 @@ fn validate_shader(
         err_output
     } else {
         let mut cmd = create_command(&compiler);
+        if let Some(ref dir) = file_dir {
+            cmd.current_dir(dir);
+        }
         cmd.args(["--stdin", target.flag(), "--error-column", "-S", stage]);
         for inc in &inc_dirs {
             cmd.arg(format!("-I{}", inc.display()));
@@ -2742,6 +2760,10 @@ fn main() -> io::Result<()> {
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "result": {
+                            "serverInfo": {
+                                "name": "glsl-language-server",
+                                "version": "0.1.0"
+                            },
                             "capabilities": {
                                 "textDocumentSync": 1,
                                 "completionProvider": {
@@ -3276,7 +3298,20 @@ mod tests {
         let p2 = uri_to_path("file:///C:/Users/test/shader.vert");
         assert!(p2.is_some());
         if cfg!(windows) {
-            assert!(p2.unwrap().to_str().unwrap().contains("C:"));
+            let s = p2.unwrap().to_string_lossy().to_string();
+            assert!(s.starts_with("C:") || s.starts_with("c:"));
+            assert!(!s.starts_with('/'));
+            assert!(!s.starts_with('\\'));
+        }
+
+        // VS Code style URI with %3A and lowercase drive letter
+        let p3 = uri_to_path("file:///d%3A/Users/test/shaders/basic/basic_vert.vert");
+        assert!(p3.is_some());
+        if cfg!(windows) {
+            let s = p3.unwrap().to_string_lossy().to_string();
+            assert!(s.starts_with("d:") || s.starts_with("D:"));
+            assert!(!s.starts_with('/'));
+            assert!(!s.starts_with('\\'));
         }
     }
 
