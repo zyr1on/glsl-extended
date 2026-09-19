@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 > [!TIP]
 > ### 📦 Quick Install: Visual Studio Code
-> 1. Download **`vscode-glsl-extended.vsix`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> 1. Download **`vscode-glsl-general-release.vsix`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
 > 2. In VS Code, open Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`), click the **`...`** (Views and More Actions) menu at the top of the Extensions panel, and select **"Install from VSIX..."**.
 > 3. Select the downloaded `vscode-glsl-extended.vsix` file.
 > 
