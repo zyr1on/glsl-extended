@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 > [!TIP]
 > ### 📦 Quick Install without Rust (Pre-compiled `.wasm`)
 > If you do not have Rust installed on your system, you can install the extension in seconds:
-> 1. Download **`zed-glsl-extended.zip`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> 1. Download **`zed-glsl-general-release.zip`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
 > 2. Extract the contents into your Zed extensions directory:
 >    - **Windows:** `%LOCALAPPDATA%\Zed\extensions\installed\glsl-extended\`
 >    - **macOS:** `~/Library/Application Support/Zed/extensions/installed/glsl-extended/`

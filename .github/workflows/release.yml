@@ -78,16 +78,16 @@ jobs:
         run: |
           cargo build --release --target wasm32-wasip2
 
-      - name: Package zed-glsl-extended.zip
+      - name: Package zed-glsl-general-release.zip
         run: |
           mkdir -p dist/package
           cp target/wasm32-wasip2/release/zed_glsl_extended.wasm dist/package/extension.wasm
           cp extension.toml dist/package/
           cp -r languages dist/package/
-          cd dist/package && zip -r ../../zed-glsl-extended.zip .
+          cd dist/package && zip -r ../../zed-glsl-general-release.zip .
 
       - name: Upload Zed Extension Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: zed-glsl-extended.zip
+          files: zed-glsl-general-release.zip
