@@ -166,123 +166,19 @@ void main() {
 
 ---
 
-## 💻 Using `glsl_validator` with Other Editors (Neovim, Helix, Sublime Text)
+## 💻 Using `glsl_validator` with Other Editors
 
-The core language server (`glsl_validator`) is distributed as a standalone native binary and can be used with any editor that supports the Language Server Protocol (LSP).
+The core language server (`glsl_validator`) can be used as a standalone LSP server with any editor that supports the Language Server Protocol (such as **Neovim**, **Helix**, **Sublime Text**, or **Emacs**).
 
-### Prerequisites
-1. **Download `glsl_validator`:** Download the pre-built native binary for your OS (Windows, Linux, macOS) from [Latest Releases](https://github.com/zyr1on/glsl-extended/releases) and place it in your system `PATH`.
-2. **Install `glslang`:** Ensure `glslangValidator` (or `glslang`) is available in your `PATH` (e.g., via Vulkan SDK, `apt install glslang-tools`, `pacman -S glslang`, or `brew install glslang`).
-3. *(Optional)* **`glsl_analyzer`**: If you wish to route semantic analysis to `glsl_analyzer`, ensure it is installed in your `PATH`.
-
-### Neovim (`nvim-lspconfig`)
-
-Add `glsl_validator` to your Neovim configuration:
-
-```lua
-local lspconfig = require('lspconfig')
-local configs = require('lspconfig.configs')
-
-if not configs.glsl_validator then
-  configs.glsl_validator = {
-    default_config = {
-      cmd = { 'glsl_validator' },
-      filetypes = { 'glsl', 'vert', 'frag', 'geom', 'comp', 'tesc', 'tese', 'rgen', 'rmiss', 'rchit' },
-      root_dir = lspconfig.util.root_pattern('.git', 'compile_flags.txt'),
-      init_options = {
-        target_api = 'opengl',          -- 'opengl' or 'vulkan'
-        formatter = 'clang-format',     -- 'clang-format' or 'builtin'
-        -- glslang_validator_path = '/custom/path/to/glslangValidator',
-      },
-    },
-  }
-end
-
-lspconfig.glsl_validator.setup({})
-```
-
-### Helix (`languages.toml`)
-
-In `~/.config/helix/languages.toml`:
-
-```toml
-[language-server.glsl_validator]
-command = "glsl_validator"
-config = { target_api = "opengl", formatter = "clang-format" }
-
-[[language]]
-name = "glsl"
-scope = "source.glsl"
-file-types = ["glsl", "vert", "frag", "geom", "comp", "tesc", "tese", "rgen", "rmiss", "rchit"]
-language-servers = [ "glsl_validator" ]
-```
-
-### Sublime Text (LSP Package)
-
-In `Preferences -> Package Settings -> LSP -> Settings`:
-
-```json
-{
-  "clients": {
-    "glsl_validator": {
-      "enabled": true,
-      "command": ["glsl_validator"],
-      "selector": "source.glsl",
-      "initializationOptions": {
-        "target_api": "opengl",
-        "formatter": "clang-format"
-      }
-    }
-  }
-}
-```
+👉 **[Read the Other Editors Configuration Guide (Neovim, Helix, Sublime Text)](docs/OTHER_EDITORS.md)**
 
 ---
 
 ## 🛠️ Building from Source
 
-If you want to build and hack on GLSL Extended locally, you can easily compile all components from source:
+Want to hack on or compile GLSL Extended locally? You can build the Rust LSP engine (`glsl_validator`), the Zed WASM extension, and the VS Code extension directly from source.
 
-### Prerequisites
-- [Rust & Cargo](https://rustup.rs/) (latest stable via `rustup`)
-- [Node.js](https://nodejs.org/) (v18+ with npm, for the VS Code extension)
-- WebAssembly Target for Zed:
-  ```bash
-  rustup target add wasm32-wasip2
-  ```
-
-### 1. Build the Language Server (`glsl_validator`)
-To compile the standalone Rust LSP engine:
-```bash
-cargo build --release --manifest-path glsl_validator/Cargo.toml
-```
-The compiled binary will be located at:
-- **Windows:** `target/release/glsl_validator.exe`
-- **Linux / macOS:** `target/release/glsl_validator`
-
-### 2. Build the Zed Extension (`.wasm`)
-To compile the WebAssembly extension for Zed Editor:
-```bash
-cargo build --release --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
-```
-The compiled `.wasm` binary will be at:
-`target/wasm32-wasip2/release/zed_glsl_extended.wasm`
-
-### 3. Build the VS Code Extension (`.vsix`)
-To compile and package the VS Code extension:
-```bash
-cd editors/vscode
-npm install
-npm run compile
-npx @vscode/vsce package --no-dependencies
-```
-This produces `vscode-glsl-extended-<version>.vsix` (under 10 KB, zero bundled binaries).
-
-### 4. Running Tests
-To run all unit and integration tests across the workspace:
-```bash
-cargo test --workspace
-```
+👉 **[Read the Full Building from Source Guide](docs/BUILDING.md)**
 
 ---
 
