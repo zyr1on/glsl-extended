@@ -21,6 +21,7 @@ grammars/
 *.log
 *.pdf
 *.spv
+DEVTO_ARTICLE.md
 .DS_Store
 Thumbs.db
 

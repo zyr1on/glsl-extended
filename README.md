@@ -74,6 +74,8 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 ## Extra Configuration (`settings.json`)
 
+### Zed Settings (`settings.json`)
+
 To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux, `Cmd+,` on macOS):
 
 ```json
@@ -108,19 +110,37 @@ To configure GLSL settings in Zed, open your settings (`Ctrl+,` on Windows/Linux
 }
 ```
 
-### Configuration Options
+### Visual Studio Code Settings (`settings.json`)
 
-| Option | Values / Default | Description |
-|---|---|---|
-| `languages.GLSL.tab_size` | `4` *(or `2`, `8`)* | Indentation space width. |
-| `languages.GLSL.format_on_save` | `"off"` *(default)* / `"on"` | Format document automatically on save. |
-| `languages.GLSL.formatter` | `glsl_validator` | Routes formatting to `glsl_validator` language server. |
-| `target_api` | `"opengl"` *(default)* / `"vulkan"` | `"opengl"` (Desktop OpenGL, respects `#version` 330–460) or `"vulkan"` (strict SPIR-V). |
-| `formatter` | `"clang-format"` *(default)* / `"builtin"` | `"clang-format"` (AST-level, auto-fallback) or `"builtin"` (pure-Rust). |
-| `glslang_validator_path` | `""` *(optional)* | Custom executable path to `glslang` or `glslangValidator`. Leave empty/null for auto-discovery and automatic Khronos download. |
-| `glsl_validator_path` | `""` *(optional)* | Custom executable path to `glsl_validator`. Leave empty/null for auto-discovery. |
-| `glsl_analyzer_path` | `""` *(optional)* | Custom executable path to `glsl_analyzer`. Leave empty/null for auto-discovery. |
-| `clang_format_path` | `""` *(optional)* | Custom executable path to `clang-format`. Leave empty/null for auto-discovery. |
+To configure GLSL settings in VS Code, open your User or Workspace `settings.json` (`Ctrl+Shift+P` -> `Preferences: Open User Settings (JSON)`):
+
+```json
+{
+  "[glsl]": {
+    "editor.tabSize": 4,
+    "editor.formatOnSave": false
+  },
+  "glslExtended.validatorPath": "",          // Custom path to glsl_validator executable
+  "glslExtended.glslangValidatorPath": "",   // Custom path to Khronos glslangValidator
+  "glslExtended.analyzerPath": "",           // Optional custom path to glsl_analyzer
+  "glslExtended.trace.server": "off"         // Trace LSP communication: "off" | "messages" | "verbose"
+}
+```
+
+### Configuration Options Reference
+
+| Option (Zed) | Option (VS Code) | Values / Default | Description |
+|---|---|---|---|
+| `languages.GLSL.tab_size` | `[glsl]["editor.tabSize"]` | `4` *(or `2`, `8`)* | Indentation space width. |
+| `languages.GLSL.format_on_save` | `[glsl]["editor.formatOnSave"]` | `"off"` / `false` | Format document automatically on save. |
+| `languages.GLSL.formatter` | *(LSP default)* | `glsl_validator` | Routes formatting to `glsl_validator` language server. |
+| `target_api` | Per-file `// @target: vulkan` | `"opengl"` *(default)* / `"vulkan"` | `"opengl"` (Desktop OpenGL, 330–460) or `"vulkan"` (strict SPIR-V). |
+| `formatter` | Per-file `// @formatter: clang-format` | `"clang-format"` *(default)* / `"builtin"` | `"clang-format"` (AST-level, auto-fallback) or `"builtin"` (pure-Rust). |
+| `glslang_validator_path` | `glslExtended.glslangValidatorPath` | `""` *(optional)* | Custom executable path to `glslang` or `glslangValidator`. Leave empty for auto-discovery and automatic Khronos download. |
+| `glsl_validator_path` | `glslExtended.validatorPath` | `""` *(optional)* | Custom executable path to `glsl_validator`. Leave empty for auto-discovery and automatic download. |
+| `glsl_analyzer_path` | `glslExtended.analyzerPath` | `""` *(optional)* | Custom executable path to `glsl_analyzer`. Leave empty for auto-discovery. |
+| `clang_format_path` | - | `""` *(optional)* | Custom executable path to `clang-format`. Leave empty for auto-discovery. |
+| - | `glslExtended.trace.server` | `"off"` *(default)*, `"messages"`, `"verbose"` | Traces communication between VS Code and the language server in the Output panel. |
 
 
 ---
