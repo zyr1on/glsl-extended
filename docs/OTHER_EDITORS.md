@@ -1,4 +1,4 @@
-﻿# Using `glsl_validator` with Other Editors
+# Using `glsl_validator` with Other Editors
 
 The core language server (`glsl_validator`) is distributed as a standalone native binary and can be used with any editor that supports the Language Server Protocol (LSP).
 
@@ -7,6 +7,21 @@ The core language server (`glsl_validator`) is distributed as a standalone nativ
 1. **Download `glsl_validator`:** Download the pre-built native binary for your OS (Windows, Linux, macOS) from [Latest Releases](https://github.com/zyr1on/glsl-extended/releases) and place it in your system `PATH`.
 2. **Install `glslang`:** Ensure `glslangValidator` (or `glslang`) is available in your `PATH` (e.g., via Vulkan SDK, `apt install glslang-tools`, `pacman -S glslang`, or `brew install glslang`).
 3. *(Optional)* **`glsl_analyzer`**: If you wish to route semantic analysis to `glsl_analyzer`, ensure it is installed in your `PATH`.
+
+> [!IMPORTANT]
+> ### `glslangValidator` is Required for Diagnostics
+> Unlike the **Zed** and **VS Code** extensions—which automatically download compiler binaries in the background—standalone editor setups require you to have **`glslangValidator`** (or `glslang`) installed on your system. 
+> 
+> Without `glslangValidator`, compiler diagnostics cannot execute. You can install it via:
+> - **Windows:** `winget install KhronosGroup.VulkanSDK` (or download the [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home))
+> - **Linux:** `sudo apt install glslang-tools` / `sudo pacman -S glslang` / `sudo dnf install glslang`
+> - **macOS:** `brew install glslang`
+
+> [!NOTE]
+> ### `glsl_analyzer` is Optional
+> `glsl_validator` contains its own built-in pure-Rust language engine for autocomplete, swizzling, signature help, and document outline:
+> - If `glsl_analyzer` is found in your `PATH`, `glsl_validator` will optionally multiplex with it for enhanced semantic analysis.
+> - If `glsl_analyzer` is **not** installed, `glsl_validator` automatically uses its built-in engine with zero functionality loss.
 
 ---
 
