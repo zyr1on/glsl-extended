@@ -108,10 +108,10 @@ jobs:
           cd editors/vscode
           npm install
           npm run compile
-          npx @vscode/vsce package --no-dependencies -o ../../vscode-glsl-extended.vsix
+          npx @vscode/vsce package -o ../../vscode-glsl-general-release.vsix
 
       - name: Upload VS Code Extension Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: vscode-glsl-extended.vsix
+          files: vscode-glsl-general-release.vsix
