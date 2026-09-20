@@ -40,6 +40,18 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('glsl-extended.downloadGlslang', async () => {
+            try {
+                await downloadGlslang(context, outputChannel);
+                vscode.window.showInformationMessage('glslangValidator reference compiler downloaded successfully.');
+                vscode.commands.executeCommand('glsl-extended.restartServer');
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Failed to download glslang: ${err?.message || err}`);
+            }
+        })
+    );
+
     await startLanguageServer(context, outputChannel);
 }
 
@@ -58,7 +70,7 @@ async function startLanguageServer(context: vscode.ExtensionContext, outputChann
             return;
         }
 
-        const glslangPath = resolveGlslang(outputChannel);
+        const glslangPath = await resolveGlslang(context, outputChannel);
         const config = vscode.workspace.getConfiguration('glslExtended');
         const analyzerPath = config.get<string>('analyzerPath') || undefined;
 
@@ -165,7 +177,31 @@ async function resolveGlslValidator(
     return await downloadGlslValidator(context, outputChannel, false);
 }
 
-function resolveGlslang(outputChannel: vscode.OutputChannel): string | undefined {
+function findFileRecursive(dir: string, targetName: string): string | undefined {
+    if (!fs.existsSync(dir)) return undefined;
+    try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isFile()) {
+                if (entry.name.toLowerCase() === targetName.toLowerCase()) {
+                    return fullPath;
+                }
+            } else if (entry.isDirectory()) {
+                const found = findFileRecursive(fullPath, targetName);
+                if (found) return found;
+            }
+        }
+    } catch {
+        // ignore inaccessible directories
+    }
+    return undefined;
+}
+
+async function resolveGlslang(
+    context: vscode.ExtensionContext,
+    outputChannel: vscode.OutputChannel
+): Promise<string | undefined> {
     // 1. User setting
     const config = vscode.workspace.getConfiguration('glslExtended');
     const configured = config.get<string>('glslangValidatorPath')?.trim();
@@ -193,8 +229,13 @@ function resolveGlslang(outputChannel: vscode.OutputChannel): string | undefined
     if (process.platform === 'win32') {
         const fallbacks = [
             'C:\\msys64\\ucrt64\\bin\\glslangValidator.exe',
+            'C:\\msys64\\ucrt64\\bin\\glslang.exe',
             'C:\\msys64\\mingw64\\bin\\glslangValidator.exe',
-            'C:\\Program Files\\glslang\\bin\\glslangValidator.exe'
+            'C:\\msys64\\mingw64\\bin\\glslang.exe',
+            'C:\\msys64\\clang64\\bin\\glslangValidator.exe',
+            'C:\\msys64\\clang64\\bin\\glslang.exe',
+            'C:\\Program Files\\glslang\\bin\\glslangValidator.exe',
+            'C:\\Program Files\\glslang\\bin\\glslang.exe'
         ];
         for (const fb of fallbacks) {
             if (fs.existsSync(fb)) return fb;
@@ -203,15 +244,116 @@ function resolveGlslang(outputChannel: vscode.OutputChannel): string | undefined
         const fallbacks = [
             '/usr/local/bin/glslangValidator',
             '/usr/bin/glslangValidator',
-            '/opt/homebrew/bin/glslangValidator'
+            '/opt/homebrew/bin/glslangValidator',
+            '/usr/local/bin/glslang',
+            '/usr/bin/glslang',
+            '/opt/homebrew/bin/glslang'
         ];
         for (const fb of fallbacks) {
             if (fs.existsSync(fb)) return fb;
         }
     }
 
-    outputChannel.appendLine('[GLSL Extended] glslangValidator not found in PATH or VULKAN_SDK.');
-    return undefined;
+    // 5. Check local extension storage (cached download)
+    const storageDir = context.globalStorageUri.fsPath;
+    const glslangDir = path.join(storageDir, 'glslang');
+    const exeName = `glslangValidator${exe}`;
+    const altExeName = `glslang${exe}`;
+
+    const cached1 = findFileRecursive(glslangDir, exeName) || findFileRecursive(glslangDir, altExeName);
+    if (cached1 && fs.existsSync(cached1) && fs.statSync(cached1).isFile()) {
+        return cached1;
+    }
+    const cached2 = findFileRecursive(storageDir, exeName) || findFileRecursive(storageDir, altExeName);
+    if (cached2 && fs.existsSync(cached2) && fs.statSync(cached2).isFile()) {
+        return cached2;
+    }
+
+    // 6. Download automatically from KhronosGroup/glslang releases
+    try {
+        return await downloadGlslang(context, outputChannel);
+    } catch (err: any) {
+        outputChannel.appendLine(`[GLSL Extended] Auto-download of glslang failed: ${err?.message || err}`);
+        return undefined;
+    }
+}
+
+async function downloadGlslang(
+    context: vscode.ExtensionContext,
+    outputChannel: vscode.OutputChannel
+): Promise<string> {
+    const storageDir = context.globalStorageUri.fsPath;
+    const glslangDir = path.join(storageDir, 'glslang');
+    if (!fs.existsSync(glslangDir)) {
+        fs.mkdirSync(glslangDir, { recursive: true });
+    }
+
+    const platform = process.platform;
+    const arch = process.arch;
+
+    return await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'GLSL Extended: Downloading glslang reference compiler',
+            cancellable: false
+        },
+        async (progress) => {
+            progress.report({ message: 'Checking KhronosGroup/glslang releases...' });
+            outputChannel.appendLine('[GLSL Extended] Fetching latest glslang release from GitHub...');
+
+            const releaseUrl = 'https://api.github.com/repos/KhronosGroup/glslang/releases/latest';
+            const releaseData = await httpGetJson(releaseUrl);
+
+            const asset = releaseData.assets?.find((a: any) => {
+                const name = (a.name || '').toLowerCase();
+                if (!name.includes('release') || name.includes('debug')) {
+                    return false;
+                }
+                if (platform === 'win32') {
+                    return name.includes('windows-x86_64') || (arch === 'arm64' && name.includes('windows-arm64'));
+                } else if (platform === 'linux') {
+                    return name.includes('linux-x86_64') || (arch === 'arm64' && name.includes('linux-arm64'));
+                } else if (platform === 'darwin') {
+                    return name.includes('macos-universal') || name.includes('macos');
+                }
+                return false;
+            });
+
+            if (!asset || !asset.browser_download_url) {
+                throw new Error(`No compatible glslang release asset found for ${platform}-${arch} in release ${releaseData.tag_name || 'latest'}`);
+            }
+
+            const downloadUrl = asset.browser_download_url;
+            const archivePath = path.join(storageDir, asset.name);
+
+            progress.report({ message: `Downloading ${asset.name}...` });
+            outputChannel.appendLine(`[GLSL Extended] Downloading ${downloadUrl} to ${archivePath}`);
+            await downloadFile(downloadUrl, archivePath);
+
+            progress.report({ message: 'Extracting glslang compiler...' });
+            outputChannel.appendLine(`[GLSL Extended] Extracting ${archivePath} to ${glslangDir}`);
+            extractArchive(archivePath, glslangDir);
+
+            // Clean up archive
+            try { fs.unlinkSync(archivePath); } catch {}
+
+            const exe = platform === 'win32' ? '.exe' : '';
+            const exeName = `glslangValidator${exe}`;
+            const altExeName = `glslang${exe}`;
+
+            const targetPath = findFileRecursive(glslangDir, exeName) || findFileRecursive(glslangDir, altExeName);
+            if (!targetPath) {
+                throw new Error(`Extracted glslang executable not found in ${glslangDir}`);
+            }
+
+            if (platform !== 'win32') {
+                fs.chmodSync(targetPath, 0o755);
+            }
+
+            outputChannel.appendLine(`[GLSL Extended] glslang installed successfully at ${targetPath}`);
+            return targetPath;
+        }
+    );
 }
 
 function findInPath(binName: string): string | undefined {

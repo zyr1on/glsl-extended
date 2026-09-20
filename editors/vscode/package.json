@@ -87,6 +87,11 @@
         "command": "glsl-extended.downloadServer",
         "title": "GLSL Extended: Download / Update Language Server Binary",
         "category": "GLSL"
+      },
+      {
+        "command": "glsl-extended.downloadGlslang",
+        "title": "GLSL Extended: Download / Update glslangValidator Reference Compiler",
+        "category": "GLSL"
       }
     ],
     "configuration": {
