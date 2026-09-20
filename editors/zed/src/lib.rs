@@ -275,7 +275,7 @@ impl GlslExtendedExtension {
         );
 
         if let Ok(release) = zed::latest_github_release(
-            "zyr1on/zed-glsl-extended",
+            "zyr1on/glsl-extended",
             zed::GithubReleaseOptions {
                 require_assets: true,
                 pre_release: false,

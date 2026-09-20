@@ -1,11 +1,11 @@
 [package]
 name = "glsl_validator"
-version = "0.1.20"
+version = "0.1.21"
 edition = "2021"
 authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 description = "Lightweight GLSL Language Server wrapper around glslangValidator for OpenGL 4.6"
 license = "MIT"
-repository = "https://github.com/zyr1on/zed-glsl-extended"
+repository = "https://github.com/zyr1on/glsl-extended"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

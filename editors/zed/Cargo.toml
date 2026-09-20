@@ -1,11 +1,11 @@
 [package]
 name = "zed-glsl-extended"
-version = "0.1.20"
+version = "0.1.21"
 edition = "2024"
 authors = ["Semih Ozdemir <semihozdmirr@gmail.com>"]
 description = "Zed GLSL Extended: High-performance standalone GLSL Language Server for OpenGL 4.6"
 license = "MIT"
-repository = "https://github.com/zyr1on/zed-glsl-extended"
+repository = "https://github.com/zyr1on/glsl-extended"
 
 [lib]
 crate-type = ["cdylib"]

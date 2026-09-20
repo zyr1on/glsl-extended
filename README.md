@@ -4,7 +4,7 @@ Comprehensive GLSL and shader development extension for **Zed Editor** and **Vis
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Zed Extension API](https://img.shields.io/badge/Zed%20Extension%20API-v0.7.0-blue)](https://crates.io/crates/zed_extension_api)
-[![Release](https://img.shields.io/github/v/release/zyr1on/zed-glsl-extended?color=green)](https://github.com/zyr1on/zed-glsl-extended/releases)
+[![Release](https://img.shields.io/github/v/release/zyr1on/glsl-extended?color=green)](https://github.com/zyr1on/glsl-extended/releases)
 
 ---
 
@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 > [!TIP]
 > ### 📦 Quick Install: Zed Editor
-> 1. Download **`zed-glsl-general-release.zip`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases) and extract it anywhere on your computer.
+> 1. Download **`zed-glsl-general-release.zip`** from [Latest Releases](https://github.com/zyr1on/glsl-extended/releases) and extract it anywhere on your computer.
 > 2. Open Zed and open the Extensions panel (`Ctrl+Shift+X` on Windows/Linux, `Cmd+Shift+X` on macOS).
 > 3. Click **"Install Dev Extension"** at the top right and select the extracted folder.
 > 
@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 
 > [!TIP]
 > ### 📦 Quick Install: Visual Studio Code
-> 1. Download **`vscode-glsl-general-release.vsix`** from [Latest Releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> 1. Download **`vscode-glsl-general-release.vsix`** from [Latest Releases](https://github.com/zyr1on/glsl-extended/releases).
 > 2. In VS Code, open Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`), click the **`...`** (Views and More Actions) menu at the top of the Extensions panel, and select **"Install from VSIX..."**.
 > 3. Select the downloaded `vscode-glsl-general-release.vsix` file.
 > 
@@ -31,7 +31,7 @@ https://github.com/user-attachments/assets/51fef2aa-2fce-43d7-9918-d6d61b49b02c
 > [!TIP]
 > ### Automatic Installation (Zero Setup)
 > **Everything is automatic!** GLSL Extended automatically resolves, downloads, and configures the required binaries from official GitHub releases when you open a shader:
-> - **`glsl_validator`**: Automatically downloaded from [zed-glsl-extended/releases](https://github.com/zyr1on/zed-glsl-extended/releases).
+> - **`glsl_validator`**: Automatically downloaded from [glsl-extended/releases](https://github.com/zyr1on/glsl-extended/releases).
 > - **`glslang` / `glslangValidator`**: Automatically downloaded from official [KhronosGroup/glslang/releases](https://github.com/KhronosGroup/glslang/releases) if not already installed in your system `PATH` or Vulkan SDK.
 > - **`glsl_analyzer`**: (Optional external Zig LSP) Automatically downloaded from [nolanderc/glsl_analyzer/releases](https://github.com/nolanderc/glsl_analyzer/releases) if chosen in settings.
 
