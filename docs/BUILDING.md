@@ -1,4 +1,4 @@
-﻿# 🛠️ Building GLSL Extended from Source
+# 🛠️ Building GLSL Extended from Source
 
 If you want to build and hack on GLSL Extended locally, you can easily compile all components from source.
 
@@ -57,10 +57,10 @@ To compile and package the VS Code extension:
 cd editors/vscode
 npm install
 npm run compile
-npx @vscode/vsce package --no-dependencies
+npx @vscode/vsce package
 ```
 
-This produces `vscode-glsl-extended-<version>.vsix` (under 10 KB, zero bundled binaries).
+This produces `vscode-glsl-extended-<version>.vsix` (self-contained with production dependencies, zero bundled binaries).
 
 ---
 

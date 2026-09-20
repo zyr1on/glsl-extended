@@ -266,7 +266,7 @@ async function downloadGlslValidator(
         async (progress) => {
             progress.report({ message: 'Checking GitHub releases...' });
 
-            const releaseUrl = 'https://api.github.com/repos/zyr1on/zed-glsl-extended/releases/latest';
+            const releaseUrl = 'https://api.github.com/repos/zyr1on/glsl-extended/releases/latest';
             const releaseData = await httpGetJson(releaseUrl);
 
             const asset = releaseData.assets?.find((a: any) => a.name === assetName);
