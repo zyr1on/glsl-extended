@@ -2,7 +2,7 @@
   "name": "vscode-glsl-extended",
   "displayName": "GLSL Extended",
   "description": "High-performance GLSL Language Server and syntax support for OpenGL and Vulkan shaders.",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "publisher": "zyr1on",
   "author": {
     "name": "Semih Ozdemir",
